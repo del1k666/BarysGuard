@@ -257,12 +257,16 @@ class HostsTab(QWidget):
         hosts = load_hosts()
         if not hosts:
             return
+        if self._ping_worker is not None and self._ping_worker.isRunning():
+            return
         self._ping_worker = PingWorker(hosts)
         self._ping_worker.result.connect(self._on_ping_result)
         self._ping_worker.start()
 
     def _ping_selected(self):
         if not self._selected_id:
+            return
+        if self._ping_worker is not None and self._ping_worker.isRunning():
             return
         hosts = [h for h in load_hosts() if h["id"] == self._selected_id]
         if hosts:
@@ -272,12 +276,14 @@ class HostsTab(QWidget):
 
     def _on_ping_result(self, host_id: str, online: bool, info: dict):
         ts = datetime.now().strftime("%H:%M:%S")
-        update_host(host_id, last_seen=ts if online else None)
+        if online:
+            update_host(host_id, last_seen=ts)
         for i in range(self._host_list.count()):
             item = self._host_list.item(i)
             h    = item.data(Qt.ItemDataRole.UserRole)
             if h["id"] == host_id:
-                h["last_seen"] = ts if online else None
+                if online:
+                    h["last_seen"] = ts
                 item.setData(Qt.ItemDataRole.UserRole, h)
                 status = "● online" if online else "● offline"
                 color  = QColor("#3fb950") if online else QColor("#f85149")
@@ -296,6 +302,10 @@ class HostsTab(QWidget):
         host = self._get_selected_host()
         if not host:
             return
+        # Guard: don't start a new scan if one is already running
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._status.setText("Скан уже выполняется...")
+            return
 
         scan_types = []
         if self._chk_yara.isChecked():
@@ -309,12 +319,17 @@ class HostsTab(QWidget):
             self._status.setText("Выбери хотя бы один тип скана")
             return
 
+        path = self._path_inp.text().strip()
+        if not path:
+            self._status.setText("Укажи путь для сканирования")
+            return
+
         self._btn_scan.setEnabled(False)
         self._prog.setVisible(True)
         self._tbl.setRowCount(0)
 
         self._scan_worker = RemoteScanWorker(
-            host, scan_types, self._path_inp.text().strip(), BUILTIN_YARA_RULES
+            host, scan_types, path, BUILTIN_YARA_RULES
         )
         self._scan_worker.progress.connect(self._status.setText)
         self._scan_worker.done.connect(self._on_scan_done)
@@ -323,8 +338,15 @@ class HostsTab(QWidget):
             self._btn_scan.setEnabled(True), self._prog.setVisible(False)
         ))
         self._scan_worker.start()
-        update_host(host["id"], last_scan=datetime.now().strftime("%H:%M:%S"))
-        self._reload_hosts()
+        ts = datetime.now().strftime("%H:%M:%S")
+        update_host(host["id"], last_scan=ts)
+        for i in range(self._host_list.count()):
+            item = self._host_list.item(i)
+            h = item.data(Qt.ItemDataRole.UserRole)
+            if h["id"] == host["id"]:
+                h["last_scan"] = ts
+                item.setData(Qt.ItemDataRole.UserRole, h)
+                break
 
     def _on_scan_done(self, results: list):
         colors = {"YARA": "#58a6ff", "IOC": "#d29922", "HASH": "#8b949e"}
@@ -335,7 +357,7 @@ class HostsTab(QWidget):
             fil  = r.get("file", "?")
             col  = colors.get(typ, "#8b949e")
             ri = QTableWidgetItem(f"[{typ}] {rule}")
-            si = QTableWidgetItem(typ)
+            si = QTableWidgetItem(r.get("severity", typ))
             fi = QTableWidgetItem(fil)
             ri.setForeground(QColor(col))
             si.setForeground(QColor(col))
@@ -357,6 +379,9 @@ class HostsTab(QWidget):
         d = dlg.data()
         if not d["ip"] or not d["username"]:
             QMessageBox.warning(self, "Ошибка", "IP и пользователь обязательны")
+            return
+        if self._deploy_worker is not None and self._deploy_worker.isRunning():
+            self._status.setText("Деплой уже выполняется...")
             return
         self._btn_deploy.setEnabled(False)
         self._prog.setVisible(True)
