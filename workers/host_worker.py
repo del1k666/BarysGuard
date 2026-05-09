@@ -1,26 +1,32 @@
-import os
 import base64
+import concurrent.futures
 from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 from core.agent_client import AgentClient
 
 
 class PingWorker(QThread):
-    """Pings all hosts concurrently; emits (host_id, is_online, info_dict)."""
+    """Pings all hosts in parallel; emits (host_id, is_online, info_dict)."""
     result = pyqtSignal(str, bool, dict)
 
     def __init__(self, hosts: list):
         super().__init__()
         self._hosts = hosts
 
+    def _ping_one(self, h: dict):
+        client = AgentClient(h["ip"], h["port"], h["token"], timeout=5)
+        try:
+            info = client.ping()
+            return h["id"], True, info
+        except Exception:
+            return h["id"], False, {}
+
     def run(self):
-        for h in self._hosts:
-            client = AgentClient(h["ip"], h["port"], h["token"], timeout=5)
-            try:
-                info = client.ping()
-                self.result.emit(h["id"], True, info)
-            except Exception:
-                self.result.emit(h["id"], False, {})
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(self._ping_one, h): h for h in self._hosts}
+            for fut in concurrent.futures.as_completed(futures):
+                host_id, online, info = fut.result()
+                self.result.emit(host_id, online, info)
 
 
 class RemoteScanWorker(QThread):
@@ -80,8 +86,8 @@ class RemoteScanWorker(QThread):
                 for h in r.get("hashes", []):
                     results.append({
                         "type": "HASH",
-                        "rule": h["sha256"][:16] + "…",
-                        "file": h["file"],
+                        "rule": (h.get("sha256") or "?")[:16] + "…",
+                        "file": h.get("file", "?"),
                     })
 
             self.done.emit(results)
@@ -129,17 +135,25 @@ class DeployWorker(QThread):
 
         try:
             self.progress.emit(f"Подключение к {self._ip} по WinRM...")
+            # Use http:// for basic deployments; switch to https://:5986 for production.
             session = winrm.Session(
                 f"http://{self._ip}:5985/wsman",
                 auth=(self._username, self._password),
                 transport="ntlm",
+                operation_timeout_sec=30,
+                read_timeout_sec=60,
             )
+            # Clear password from memory as soon as the session is established
+            self._password = None
 
             self.progress.emit("Создание директории C:\\Program Files\\IOCAgent...")
-            session.run_ps(
+            res = session.run_ps(
                 "New-Item -ItemType Directory -Force "
                 "-Path 'C:\\Program Files\\IOCAgent' | Out-Null"
             )
+            if res.status_code != 0:
+                self.error.emit(f"Не удалось создать директорию: {res.std_err.decode('utf-8', errors='replace')}")
+                return
 
             self.progress.emit(f"Копирование {agent_path.name} ({agent_path.stat().st_size // 1024} КБ)...")
             raw   = agent_path.read_bytes()
@@ -149,26 +163,42 @@ class DeployWorker(QThread):
                 "[System.IO.File]::WriteAllBytes("
                 "'C:\\Program Files\\IOCAgent\\agent.exe', [byte[]]@())"
             )
-            for i in range(0, len(b64), chunk):
-                part = b64[i : i + chunk]
-                session.run_ps(
-                    f"$b=[Convert]::FromBase64String('{part}');"
-                    "$f=[IO.File]::Open('C:\\Program Files\\IOCAgent\\agent.exe','Append');"
-                    "$f.Write($b,0,$b.Length);$f.Close()"
-                )
+            try:
+                for i in range(0, len(b64), chunk):
+                    part = b64[i: i + chunk]
+                    pct = (i + chunk) * 100 // len(b64)
+                    self.progress.emit(f"Загрузка агента... {min(pct, 100)}%")
+                    res = session.run_ps(
+                        f"$b=[Convert]::FromBase64String('{part}');"
+                        "$f=[IO.File]::Open('C:\\Program Files\\IOCAgent\\agent.exe','Append');"
+                        "$f.Write($b,0,$b.Length);$f.Close()"
+                    )
+                    if res.status_code != 0:
+                        session.run_ps("Remove-Item 'C:\\Program Files\\IOCAgent\\agent.exe' -Force -EA SilentlyContinue")
+                        self.error.emit(f"Ошибка при копировании файла: {res.std_err.decode('utf-8', errors='replace')}")
+                        return
+            except Exception as e:
+                self.error.emit(f"Ошибка передачи файла: {e}")
+                return
 
             self.progress.emit("Установка Windows Service...")
-            session.run_ps(
+            res = session.run_ps(
                 "cd 'C:\\Program Files\\IOCAgent'; .\\agent.exe --install"
             )
+            if res.status_code != 0:
+                self.error.emit(f"Ошибка установки сервиса: {res.std_err.decode('utf-8', errors='replace')}")
+                return
             session.run_ps("Start-Service IOCAgent -ErrorAction SilentlyContinue")
 
             self.progress.emit("Чтение токена...")
-            r     = session.run_ps(
-                "Get-Content 'C:\\Program Files\\IOCAgent\\token.txt'"
-            )
+            r = session.run_ps("Get-Content 'C:\\Program Files\\IOCAgent\\token.txt'")
+            if r.status_code != 0 or not r.std_out:
+                self.error.emit("Не удалось прочитать токен. Подождите несколько секунд и попробуйте снова.")
+                return
             token = r.std_out.decode("utf-8").strip()
-
+            if not token:
+                self.error.emit("Токен пустой — агент мог не запуститься ещё. Повторите попытку.")
+                return
             self.done.emit(token)
         except Exception as e:
             self.error.emit(str(e))
