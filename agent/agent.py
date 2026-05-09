@@ -1,0 +1,375 @@
+"""
+IOC Analyzer Agent — remote scanning daemon.
+
+  python agent.py                  run in foreground (test mode)
+  python agent.py --install        install as Windows Service
+  python agent.py --uninstall      remove Windows Service
+  python agent.py --start          start the installed service
+"""
+import sys
+import os
+import ssl
+import json
+import secrets
+import socket
+import tempfile
+import subprocess
+import platform
+import hashlib
+from pathlib import Path
+from datetime import datetime
+from functools import wraps
+
+import psutil
+from flask import Flask, request, jsonify
+
+# ── Paths ──────────────────────────────────────────────────────────────────
+AGENT_VERSION = "1.0.0"
+PORT          = 5555
+AGENT_DIR     = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+CERT_FILE     = AGENT_DIR / "cert.pem"
+KEY_FILE      = AGENT_DIR / "key.pem"
+TOKEN_FILE    = AGENT_DIR / "token.txt"
+
+YARA_EXE: str | None = None
+for _p in [AGENT_DIR / "yara64.exe", Path(r"C:\Tools\yara\yara64.exe")]:
+    if _p.exists():
+        YARA_EXE = str(_p)
+        break
+
+# ── Auth ───────────────────────────────────────────────────────────────────
+_token: str = ""
+
+def _load_token() -> str:
+    global _token
+    if TOKEN_FILE.exists():
+        _token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+    else:
+        _token = secrets.token_hex(32)
+        TOKEN_FILE.write_text(_token, encoding="utf-8")
+    return _token
+
+
+def _auth(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if request.headers.get("X-Api-Token") != _token:
+            return jsonify({"error": "unauthorized"}), 403
+        return f(*args, **kwargs)
+    return wrapper
+
+
+# ── Certificate ───────────────────────────────────────────────────────────
+def _generate_cert() -> bool:
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime as dt
+
+        key  = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, socket.gethostname())])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(dt.datetime.utcnow())
+            .not_valid_after(dt.datetime.utcnow() + dt.timedelta(days=3650))
+            .sign(key, hashes.SHA256())
+        )
+        CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        KEY_FILE.write_bytes(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ))
+        return True
+    except Exception:
+        return False
+
+
+# ── Flask app ──────────────────────────────────────────────────────────────
+app = Flask(__name__)
+
+
+@app.route("/ping")
+@_auth
+def ping():
+    return jsonify({
+        "status":        "ok",
+        "hostname":      socket.gethostname(),
+        "os":            platform.platform(),
+        "agent_version": AGENT_VERSION,
+        "timestamp":     datetime.now().isoformat(),
+    })
+
+
+@app.route("/info")
+@_auth
+def info():
+    mem  = psutil.virtual_memory()
+    disk = psutil.disk_usage("C:\\")
+    return jsonify({
+        "cpu_percent":  psutil.cpu_percent(interval=0.5),
+        "ram_total":    mem.total,
+        "ram_used":     mem.used,
+        "ram_percent":  mem.percent,
+        "disk_total":   disk.total,
+        "disk_used":    disk.used,
+        "disk_percent": disk.percent,
+        "boot_time":    psutil.boot_time(),
+        "users":        [u.name for u in psutil.users()],
+    })
+
+
+@app.route("/scan/yara", methods=["POST"])
+@_auth
+def scan_yara():
+    data       = request.json or {}
+    rules_dict = data.get("rules", {})
+    path       = data.get("path", r"C:\Users")
+
+    if not rules_dict:
+        return jsonify({"error": "no rules"}), 400
+    if not os.path.exists(path):
+        return jsonify({"error": f"path not found: {path}"}), 400
+
+    matches = []
+    if not YARA_EXE:
+        matches.append({"rule": "INFO", "file": "yara64.exe not found on agent"})
+        return jsonify({"matches": matches})
+
+    for rule_name, rule_text in rules_dict.items():
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".yar")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(rule_text)
+            for fpath in _collect_files(path):
+                try:
+                    r = subprocess.run(
+                        [YARA_EXE, tmp_path, fpath],
+                        capture_output=True, text=True, timeout=15,
+                        encoding="utf-8", errors="replace",
+                    )
+                    for line in r.stdout.strip().splitlines():
+                        line = line.strip()
+                        if line and " " in line:
+                            parts = line.split(" ", 1)
+                            matches.append({"rule": parts[0], "file": parts[1]})
+                    if r.stderr.strip():
+                        matches.append({"rule": "WARN", "file": f"[{rule_name}] {r.stderr.strip()[:150]}"})
+                except subprocess.TimeoutExpired:
+                    matches.append({"rule": "TIMEOUT", "file": fpath})
+                except Exception as e:
+                    matches.append({"rule": "ERROR", "file": str(e)})
+        except Exception as e:
+            matches.append({"rule": "COMPILE_ERR", "file": f"{rule_name}: {e}"})
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    return jsonify({"matches": matches})
+
+
+@app.route("/scan/ioc", methods=["POST"])
+@_auth
+def scan_ioc():
+    PS = r"""
+$out = @()
+$procs = Get-Process | ForEach-Object {
+    try { $p = $_.Path } catch { $p = 'N/A' }
+    $sus = $p -and $p -ne 'N/A' -and $p -notlike 'C:\Windows\*' -and $p -notlike 'C:\Program Files*'
+    [PSCustomObject]@{Name=$_.ProcessName;PID=$_.Id;Path=if($p){$p}else{'N/A'};Suspicious=$sus}
+}
+$procs | ForEach-Object { $out += "PROC|$($_.Name)|$($_.PID)|$($_.Path)|$($_.Suspicious)" }
+$nets = Get-NetTCPConnection -State Established -EA SilentlyContinue
+$nets | ForEach-Object {
+    $pn = (Get-Process -Id $_.OwningProcess -EA SilentlyContinue).ProcessName
+    $out += "NET|$pn|$($_.LocalAddress):$($_.LocalPort)|$($_.RemoteAddress):$($_.RemotePort)"
+}
+@('HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run') | ForEach-Object {
+    $rk = $_
+    try {
+        $v = Get-ItemProperty $rk -EA SilentlyContinue
+        if ($v) { $v.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } |
+            ForEach-Object { $out += "REG|$($_.Name)|$($_.Value)" } }
+    } catch {}
+}
+$out -join "`n"
+"""
+    result = {"processes": [], "connections": [], "autoruns": [], "error": ""}
+    try:
+        r = subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-Command", PS],
+            capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
+        )
+        for line in r.stdout.strip().splitlines():
+            parts = line.split("|")
+            if not parts:
+                continue
+            if parts[0] == "PROC" and len(parts) >= 5:
+                result["processes"].append({
+                    "name": parts[1], "pid": parts[2],
+                    "path": parts[3], "suspicious": parts[4].lower() == "true",
+                })
+            elif parts[0] == "NET" and len(parts) >= 4:
+                result["connections"].append(
+                    {"process": parts[1], "local": parts[2], "remote": parts[3]}
+                )
+            elif parts[0] == "REG" and len(parts) >= 3:
+                result["autoruns"].append({"name": parts[1], "value": parts[2]})
+    except Exception as e:
+        result["error"] = str(e)
+
+    return jsonify(result)
+
+
+@app.route("/scan/memory", methods=["POST"])
+@_auth
+def scan_memory():
+    data       = request.json or {}
+    pid        = data.get("pid", 0)
+    rules_dict = data.get("rules", {})
+
+    if not pid:
+        procs = []
+        for p in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                procs.append({
+                    "pid":  p.info["pid"],
+                    "name": p.info["name"],
+                    "exe":  p.info.get("exe") or "",
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return jsonify({"processes": procs})
+
+    matches = []
+    if YARA_EXE and rules_dict:
+        try:
+            exe_path = psutil.Process(int(pid)).exe()
+        except Exception:
+            return jsonify({"error": f"cannot access process {pid}"}), 400
+
+        for rule_name, rule_text in rules_dict.items():
+            tmp_path = None
+            try:
+                fd, tmp_path = tempfile.mkstemp(suffix=".yar")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(rule_text)
+                r = subprocess.run(
+                    [YARA_EXE, tmp_path, exe_path],
+                    capture_output=True, text=True, timeout=15,
+                )
+                for line in r.stdout.strip().splitlines():
+                    if " " in line.strip():
+                        parts = line.strip().split(" ", 1)
+                        matches.append({"rule": parts[0], "file": parts[1]})
+            except Exception as e:
+                matches.append({"rule": "ERROR", "file": str(e)})
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+    return jsonify({"matches": matches})
+
+
+@app.route("/scan/hashes", methods=["POST"])
+@_auth
+def scan_hashes():
+    data  = request.json or {}
+    path  = data.get("path", r"C:\Users")
+    items = []
+    for fpath in _collect_files(path)[:200]:
+        try:
+            h = hashlib.sha256()
+            with open(fpath, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            items.append({"file": fpath, "sha256": h.hexdigest()})
+        except (PermissionError, OSError):
+            pass
+    return jsonify({"hashes": items})
+
+
+def _collect_files(path: str) -> list:
+    if os.path.isfile(path):
+        return [path]
+    files = []
+    try:
+        for root, _, fnames in os.walk(path):
+            for fn in fnames:
+                files.append(os.path.join(root, fn))
+    except Exception:
+        pass
+    return files
+
+
+# ── Server startup ─────────────────────────────────────────────────────────
+def run_server():
+    _load_token()
+    if not CERT_FILE.exists() or not KEY_FILE.exists():
+        print("[IOCAgent] Generating self-signed certificate...")
+        _generate_cert()
+    print(f"[IOCAgent] v{AGENT_VERSION} starting on https://0.0.0.0:{PORT}")
+    print(f"[IOCAgent] Token: {_token}")
+    print(f"[IOCAgent] YARA:  {YARA_EXE or 'NOT FOUND — scans will fail'}")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(CERT_FILE), str(KEY_FILE))
+    app.run(host="0.0.0.0", port=PORT, ssl_context=ctx,
+            debug=False, use_reloader=False)
+
+
+# ── Windows Service ────────────────────────────────────────────────────────
+def _run_as_service():
+    import win32serviceutil
+    import win32service
+    import win32event
+    import servicemanager
+
+    class IOCAgentService(win32serviceutil.ServiceFramework):
+        _svc_name_         = "IOCAgent"
+        _svc_display_name_ = "IOC Analyzer Agent"
+        _svc_description_  = "Remote scanning agent for IOC Analyzer"
+
+        def __init__(self, args):
+            win32serviceutil.ServiceFramework.__init__(self, args)
+            self._stop = win32event.CreateEvent(None, 0, 0, None)
+
+        def SvcStop(self):
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            win32event.SetEvent(self._stop)
+
+        def SvcDoRun(self):
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STARTED,
+                (self._svc_name_, ""),
+            )
+            run_server()
+
+    if len(sys.argv) == 1:
+        servicemanager.Initialize()
+        servicemanager.PrepareToHostSingle(IOCAgentService)
+        servicemanager.StartServiceCtrlDispatcher()
+    else:
+        win32serviceutil.HandleCommandLine(IOCAgentService)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if any(a in args for a in ["--install", "--uninstall", "--start", "--stop", "--remove"]):
+        _run_as_service()
+    else:
+        run_server()
