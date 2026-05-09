@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\" -Recurse -Force | ForEach-Object { $_.FullName })",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\" -Recurse -File)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(\\(Get-Item \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\\\\main.py\"\\).Length; \\(Get-Item \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\\\\check.py\"\\).Length)",
+      "PowerShell(\\(Get-Item \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\\\\main.py\"\\).Length / 1KB; \\(Get-Item \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\\\\check.py\"\\).Length / 1KB)",
+      "Bash(python *)",
+      "PowerShell(cd \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\"; Write-Host \"=== Checking ROOT directory ===\"; Test-Path \"config.py\" -PathType Leaf; Test-Path \"styles.py\" -PathType Leaf; Test-Path \"constants.py\" -PathType Leaf; Write-Host \"`n=== Listing root directory ===\"; Get-ChildItem -Path \".\" | Where-Object {$_.Name -match \"\\(config|styles|constants\\)\\\\.py$\"} | Select-Object Name)",
+      "PowerShell(cd \"C:\\\\Users\\\\ronin\\\\Desktop\\\\IOC_Analyzer_v2 \\(12\\)\\\\ioc_analyzer_v2\"; Write-Host \"=== Files in PROJECT ROOT \\(long listing\\) ===\"; Get-Item config.py, styles.py, constants.py | Select-Object FullName, @{Name='Size';Expression={$_.Length}})"
+    ]
+  }
+}
