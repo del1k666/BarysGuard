@@ -74,9 +74,10 @@ class _DeployDialog(QDialog):
 
 
 class HostsTab(QWidget):
-    def __init__(self, on_host_changed=None):
+    def __init__(self, on_host_changed=None, on_hosts_list_changed=None):
         super().__init__()
         self._on_host_changed = on_host_changed
+        self._on_hosts_list_changed = on_hosts_list_changed
         self._selected_id: str | None = None
         self._ping_worker: PingWorker | None = None
         self._scan_worker: RemoteScanWorker | None = None
@@ -233,6 +234,8 @@ class HostsTab(QWidget):
             return
         add_host(d["name"], d["ip"], d["port"], d["token"])
         self._reload_hosts()
+        if self._on_hosts_list_changed:
+            self._on_hosts_list_changed()
 
     def _remove_host(self):
         if not self._selected_id:
@@ -247,6 +250,8 @@ class HostsTab(QWidget):
         if self._on_host_changed:
             self._on_host_changed(None)
         self._reload_hosts()
+        if self._on_hosts_list_changed:
+            self._on_hosts_list_changed()
 
     def _start_ping_timer(self):
         self._ping_timer = QTimer(self)

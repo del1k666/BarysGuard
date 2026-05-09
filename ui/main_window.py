@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
         self.quarantine_tab = QuarantineTab()
         tabs.addTab(self.quarantine_tab, "  Quarantine  ")
         tabs.addTab(SettingsTab(),       "  Settings  ")
-        self._hosts_tab = HostsTab(on_host_changed=self._on_host_changed)
+        self._hosts_tab = HostsTab(on_host_changed=self._on_host_changed, on_hosts_list_changed=self._refresh_host_combo)
         tabs.addTab(self._hosts_tab, "  🌐 Hosts  ")
         ml.addWidget(tabs)
 
@@ -103,4 +103,7 @@ class MainWindow(QMainWindow):
             if (host is None and d is None) or (d and host and d.get("id") == host.get("id")):
                 self._host_combo.setCurrentIndex(i)
                 break
+        else:
+            self._host_combo.setCurrentIndex(0)
+            host_state.set_current_host(None)
         self._host_combo.blockSignals(False)
