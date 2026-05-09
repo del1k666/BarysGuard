@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox
 from PyQt6.QtCore import Qt
 from ui.dashboard_tab import DashboardTab
 from ui.hash_tab import HashTab
@@ -10,6 +10,9 @@ from ui.net_intel_tab import NetIntelTab
 from ui.quarantine_tab import QuarantineTab
 from ui.memory_scanner_tab import MemoryScannerTab
 from ui.settings_tab import SettingsTab
+from ui.hosts_tab import HostsTab
+import core.host_state as host_state
+from core.hosts_config import load_hosts
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +39,15 @@ class MainWindow(QMainWindow):
         s.setStyleSheet("font-size:10px;color:#8b949e;letter-spacing:1px;")
         s.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hl.addWidget(s)
+        self._host_combo = QComboBox()
+        self._host_combo.setFixedWidth(200)
+        self._host_combo.setStyleSheet(
+            "QComboBox{background:#0d1117;color:#58a6ff;border:1px solid #30363d;"
+            "border-radius:4px;padding:2px 8px;font-size:12px;}"
+        )
+        self._host_combo.currentIndexChanged.connect(self._combo_changed)
+        hl.addWidget(self._host_combo)
+        self._refresh_host_combo()
         ml.addWidget(hdr)
 
         # Tabs
@@ -54,6 +66,8 @@ class MainWindow(QMainWindow):
         self.quarantine_tab = QuarantineTab()
         tabs.addTab(self.quarantine_tab, "  Quarantine  ")
         tabs.addTab(SettingsTab(),       "  Settings  ")
+        self._hosts_tab = HostsTab(on_host_changed=self._on_host_changed)
+        tabs.addTab(self._hosts_tab, "  🌐 Hosts  ")
         ml.addWidget(tabs)
 
         # Footer
@@ -67,3 +81,26 @@ class MainWindow(QMainWindow):
         for w in ftr.findChildren(QLabel):
             w.setStyleSheet("color:#484f58;font-size:10px;")
         ml.addWidget(ftr)
+
+    def _refresh_host_combo(self):
+        self._host_combo.blockSignals(True)
+        self._host_combo.clear()
+        self._host_combo.addItem("🖥  Local", None)
+        for h in load_hosts():
+            self._host_combo.addItem(f"🌐  {h['name']}  ({h['ip']})", h)
+        self._host_combo.blockSignals(False)
+
+    def _combo_changed(self, idx: int):
+        h = self._host_combo.itemData(idx)
+        host_state.set_current_host(h)
+
+    def _on_host_changed(self, host):
+        host_state.set_current_host(host)
+        self._refresh_host_combo()
+        self._host_combo.blockSignals(True)
+        for i in range(self._host_combo.count()):
+            d = self._host_combo.itemData(i)
+            if (host is None and d is None) or (d and host and d.get("id") == host.get("id")):
+                self._host_combo.setCurrentIndex(i)
+                break
+        self._host_combo.blockSignals(False)
