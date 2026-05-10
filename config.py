@@ -19,6 +19,7 @@ class Config:
         "vt_rate_limit_sec": 15,
         "auto_save_reports": False,
         "theme":             "dark",
+        "language":          "rus",
     }
 
     @classmethod

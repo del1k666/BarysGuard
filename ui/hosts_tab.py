@@ -9,23 +9,25 @@ from PyQt6.QtGui import QFont, QColor
 from core.hosts_config import load_hosts, add_host, remove_host, update_host
 from workers.host_worker import PingWorker, RemoteScanWorker, DeployWorker
 from constants import BUILTIN_YARA_RULES
+from core.i18n import t
+from core.lang_signal import lang_signal
 from datetime import datetime
 
 
 class _AddHostDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Добавить хост")
+        self.setWindowTitle(t("hosts_add_dialog_title"))
         self.setMinimumWidth(360)
         layout = QFormLayout(self)
         self._name  = QLineEdit(); self._name.setPlaceholderText("WS-FINANCE01")
         self._ip    = QLineEdit(); self._ip.setPlaceholderText("192.168.1.10")
         self._port  = QSpinBox();  self._port.setRange(1, 65535); self._port.setValue(5555)
-        self._token = QLineEdit(); self._token.setPlaceholderText("из agent/token.txt")
-        layout.addRow("Имя:",    self._name)
-        layout.addRow("IP:",     self._ip)
-        layout.addRow("Порт:",   self._port)
-        layout.addRow("Токен:",  self._token)
+        self._token = QLineEdit(); self._token.setPlaceholderText("agent/token.txt")
+        layout.addRow(t("hosts_add_name"),  self._name)
+        layout.addRow(t("hosts_add_ip"),    self._ip)
+        layout.addRow(t("hosts_add_port"),  self._port)
+        layout.addRow(t("hosts_add_token"), self._token)
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -45,16 +47,16 @@ class _AddHostDialog(QDialog):
 class _DeployDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Deploy агента (WinRM)")
+        self.setWindowTitle(t("hosts_deploy_dialog_title"))
         self.setMinimumWidth(360)
         layout = QFormLayout(self)
         self._ip   = QLineEdit(); self._ip.setPlaceholderText("192.168.1.10")
-        self._user = QLineEdit(); self._user.setPlaceholderText("DOMAIN\\admin или admin")
+        self._user = QLineEdit(); self._user.setPlaceholderText("DOMAIN\\admin")
         self._pwd  = QLineEdit(); self._pwd.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addRow("IP хоста:", self._ip)
-        layout.addRow("Пользователь:", self._user)
-        layout.addRow("Пароль:", self._pwd)
-        note = QLabel("Требует WinRM (порт 5985) на целевом хосте.")
+        layout.addRow(t("hosts_deploy_ip"),   self._ip)
+        layout.addRow(t("hosts_deploy_user"), self._user)
+        layout.addRow(t("hosts_deploy_pwd"),  self._pwd)
+        note = QLabel(t("hosts_deploy_note"))
         note.setStyleSheet("color:#8b949e;font-size:11px;")
         note.setWordWrap(True)
         layout.addRow(note)
@@ -85,6 +87,7 @@ class HostsTab(QWidget):
         self._build()
         self._reload_hosts()
         self._start_ping_timer()
+        lang_signal.changed.connect(self.retranslate)
 
     def _build(self):
         lay = QVBoxLayout(self)
@@ -99,7 +102,7 @@ class HostsTab(QWidget):
         ll.setContentsMargins(0, 0, 0, 0)
         ll.setSpacing(6)
 
-        self._lbl_count = QLabel("Хосты (0)")
+        self._lbl_count = QLabel(t("hosts_count", n=0))
         self._lbl_count.setStyleSheet("color:#8b949e;font-size:11px;")
         ll.addWidget(self._lbl_count)
 
@@ -108,14 +111,14 @@ class HostsTab(QWidget):
         ll.addWidget(self._host_list)
 
         row_btns = QHBoxLayout()
-        btn_add = QPushButton("+ Добавить")
-        btn_add.setObjectName("secondaryBtn")
-        btn_add.clicked.connect(self._add_host)
-        self._btn_remove = QPushButton("Удалить")
+        self._btn_add = QPushButton(t("hosts_add_btn"))
+        self._btn_add.setObjectName("secondaryBtn")
+        self._btn_add.clicked.connect(self._add_host)
+        self._btn_remove = QPushButton(t("hosts_remove_btn"))
         self._btn_remove.setObjectName("secondaryBtn")
         self._btn_remove.setEnabled(False)
         self._btn_remove.clicked.connect(self._remove_host)
-        row_btns.addWidget(btn_add)
+        row_btns.addWidget(self._btn_add)
         row_btns.addWidget(self._btn_remove)
         ll.addLayout(row_btns)
 
@@ -127,20 +130,20 @@ class HostsTab(QWidget):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(8)
 
-        self._info_label = QLabel("Выбери хост слева")
+        self._info_label = QLabel(t("hosts_select_hint"))
         self._info_label.setStyleSheet("color:#8b949e;font-size:12px;padding:8px;")
         rl.addWidget(self._info_label)
 
         act_row = QHBoxLayout()
-        self._btn_deploy = QPushButton("📦 Deploy агента")
+        self._btn_deploy = QPushButton(t("hosts_deploy_btn"))
         self._btn_deploy.setObjectName("secondaryBtn")
         self._btn_deploy.setEnabled(False)
         self._btn_deploy.clicked.connect(self._deploy)
-        self._btn_ping = QPushButton("⟳ Ping")
+        self._btn_ping = QPushButton(t("hosts_ping_btn"))
         self._btn_ping.setObjectName("secondaryBtn")
         self._btn_ping.setEnabled(False)
         self._btn_ping.clicked.connect(self._ping_selected)
-        self._btn_scan = QPushButton("▶ Сканировать")
+        self._btn_scan = QPushButton(t("hosts_scan_btn"))
         self._btn_scan.setFixedHeight(34)
         self._btn_scan.setEnabled(False)
         self._btn_scan.clicked.connect(self._scan)
@@ -150,53 +153,81 @@ class HostsTab(QWidget):
         act_row.addWidget(self._btn_scan)
         rl.addLayout(act_row)
 
-        grp_opt = QGroupBox("Что сканировать")
-        opt_lay = QHBoxLayout(grp_opt)
+        self._grp_opt = QGroupBox(t("hosts_what_to_scan"))
+        opt_lay = QHBoxLayout(self._grp_opt)
         self._chk_yara   = QCheckBox("YARA")
         self._chk_yara.setChecked(True)
         self._chk_ioc    = QCheckBox("IOC")
         self._chk_ioc.setChecked(True)
-        self._chk_hashes = QCheckBox("Хэши файлов")
+        self._chk_hashes = QCheckBox(t("hosts_hashes_chk"))
         self._path_inp   = QLineEdit()
         self._path_inp.setPlaceholderText(r"C:\Users")
         self._path_inp.setText(r"C:\Users")
+        self._lbl_path = QLabel(t("hosts_path_label"))
         opt_lay.addWidget(self._chk_yara)
         opt_lay.addWidget(self._chk_ioc)
         opt_lay.addWidget(self._chk_hashes)
-        opt_lay.addWidget(QLabel("Путь:"))
+        opt_lay.addWidget(self._lbl_path)
         opt_lay.addWidget(self._path_inp)
-        rl.addWidget(grp_opt)
+        rl.addWidget(self._grp_opt)
 
         self._prog = QProgressBar()
         self._prog.setRange(0, 0)
         self._prog.setFixedHeight(5)
         self._prog.setVisible(False)
-        self._status = QLabel("Готов")
+        self._status = QLabel(t("hosts_ready"))
         self._status.setStyleSheet("color:#8b949e;font-size:11px;")
         rl.addWidget(self._prog)
         rl.addWidget(self._status)
 
-        grp_res = QGroupBox("Результаты")
-        res_lay = QVBoxLayout(grp_res)
+        self._grp_res = QGroupBox(t("hosts_results"))
+        res_lay = QVBoxLayout(self._grp_res)
         self._tbl = QTableWidget(0, 3)
-        self._tbl.setHorizontalHeaderLabels(["Тип / Правило", "Severity", "Файл / Детали"])
+        self._tbl.setHorizontalHeaderLabels([
+            t("hosts_tbl_type"), "Severity", t("hosts_tbl_file")
+        ])
         self._tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._tbl.horizontalHeader().resizeSection(0, 180)
         self._tbl.horizontalHeader().resizeSection(1, 70)
         self._tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         res_lay.addWidget(self._tbl)
-        rl.addWidget(grp_res)
+        rl.addWidget(self._grp_res)
 
         splitter.addWidget(right)
         splitter.setSizes([220, 560])
         lay.addWidget(splitter)
 
+    def retranslate(self, _lang: str = ""):
+        self._btn_add.setText(t("hosts_add_btn"))
+        self._btn_remove.setText(t("hosts_remove_btn"))
+        self._btn_deploy.setText(t("hosts_deploy_btn"))
+        self._btn_ping.setText(t("hosts_ping_btn"))
+        self._btn_scan.setText(t("hosts_scan_btn"))
+        self._grp_opt.setTitle(t("hosts_what_to_scan"))
+        self._chk_hashes.setText(t("hosts_hashes_chk"))
+        self._lbl_path.setText(t("hosts_path_label"))
+        self._grp_res.setTitle(t("hosts_results"))
+        self._tbl.setHorizontalHeaderLabels([
+            t("hosts_tbl_type"), "Severity", t("hosts_tbl_file")
+        ])
+        if self._status.text() in (
+            "Готов", "Ready", "Дайын",
+            t("hosts_ready"),
+        ):
+            self._status.setText(t("hosts_ready"))
+        if self._info_label.text() in (
+            "Выбери хост слева", "Select a host on the left", "Сол жақтан хостты таңдаңыз",
+            t("hosts_select_hint"),
+        ):
+            self._info_label.setText(t("hosts_select_hint"))
+        self._reload_hosts()
+
     def _reload_hosts(self):
         self._host_list.clear()
         hosts = load_hosts()
-        self._lbl_count.setText(f"Хосты ({len(hosts)})")
+        self._lbl_count.setText(t("hosts_count", n=len(hosts)))
         for h in hosts:
-            item = QListWidgetItem(f"🖥 {h['name']}\n{h['ip']}:{h['port']}")
+            item = QListWidgetItem(f"\U0001f5a5 {h['name']}\n{h['ip']}:{h['port']}")
             item.setData(Qt.ItemDataRole.UserRole, h)
             self._host_list.addItem(item)
 
@@ -207,7 +238,7 @@ class HostsTab(QWidget):
             self._btn_deploy.setEnabled(False)
             self._btn_ping.setEnabled(False)
             self._btn_scan.setEnabled(False)
-            self._info_label.setText("Выбери хост слева")
+            self._info_label.setText(t("hosts_select_hint"))
             return
         host = self._host_list.item(row).data(Qt.ItemDataRole.UserRole)
         self._selected_id = host["id"]
@@ -215,11 +246,11 @@ class HostsTab(QWidget):
         self._btn_deploy.setEnabled(True)
         self._btn_ping.setEnabled(True)
         self._btn_scan.setEnabled(True)
-        seen = host.get("last_seen") or "никогда"
-        scan = host.get("last_scan") or "никогда"
+        seen = host.get("last_seen") or t("hosts_never")
+        scan = host.get("last_scan") or t("hosts_never")
         self._info_label.setText(
             f"<b>{host['name']}</b>  ·  {host['ip']}:{host['port']}"
-            f"  ·  последний ping: {seen}  ·  последний скан: {scan}"
+            f"  ·  {t('hosts_last_ping')} {seen}  ·  {t('hosts_last_scan')} {scan}"
         )
         if self._on_host_changed:
             self._on_host_changed(host)
@@ -230,7 +261,7 @@ class HostsTab(QWidget):
             return
         d = dlg.data()
         if not d["ip"] or not d["name"]:
-            QMessageBox.warning(self, "Ошибка", "IP и Имя обязательны")
+            QMessageBox.warning(self, t("error"), t("hosts_add_error"))
             return
         add_host(d["name"], d["ip"], d["port"], d["token"])
         self._reload_hosts()
@@ -241,7 +272,7 @@ class HostsTab(QWidget):
         if not self._selected_id:
             return
         if QMessageBox.question(
-            self, "Удалить хост?", "Удалить этот хост из списка?",
+            self, t("hosts_remove_confirm_title"), t("hosts_remove_confirm_msg"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -290,10 +321,10 @@ class HostsTab(QWidget):
                 if online:
                     h["last_seen"] = ts
                 item.setData(Qt.ItemDataRole.UserRole, h)
-                status = "● online" if online else "● offline"
+                status = t("hosts_ping_online") if online else t("hosts_ping_offline")
                 color  = QColor("#3fb950") if online else QColor("#f85149")
                 item.setForeground(color)
-                item.setText(f"🖥 {h['name']}\n{h['ip']}:{h['port']}  {status}")
+                item.setText(f"\U0001f5a5 {h['name']}\n{h['ip']}:{h['port']}  {status}")
                 break
 
     def _get_selected_host(self) -> dict | None:
@@ -307,9 +338,8 @@ class HostsTab(QWidget):
         host = self._get_selected_host()
         if not host:
             return
-        # Guard: don't start a new scan if one is already running
         if self._scan_worker is not None and self._scan_worker.isRunning():
-            self._status.setText("Скан уже выполняется...")
+            self._status.setText(t("hosts_already_running"))
             return
 
         scan_types = []
@@ -321,12 +351,12 @@ class HostsTab(QWidget):
             scan_types.append("hashes")
 
         if not scan_types:
-            self._status.setText("Выбери хотя бы один тип скана")
+            self._status.setText(t("hosts_no_scan_type"))
             return
 
         path = self._path_inp.text().strip()
         if not path:
-            self._status.setText("Укажи путь для сканирования")
+            self._status.setText(t("hosts_no_path"))
             return
 
         self._btn_scan.setEnabled(False)
@@ -372,10 +402,10 @@ class HostsTab(QWidget):
             self._tbl.setItem(i, 1, si)
             self._tbl.setItem(i, 2, fi)
         hits = len([r for r in results if r.get("type") in ("YARA", "IOC")])
-        self._status.setText(f"Найдено: {hits} | Всего записей: {len(results)}")
+        self._status.setText(t("hosts_found", hits=hits, total=len(results)))
 
     def _on_scan_error(self, msg: str):
-        self._status.setText(f"✘ Ошибка: {msg}")
+        self._status.setText(t("hosts_error", msg=msg))
 
     def _deploy(self):
         dlg = _DeployDialog(self)
@@ -383,14 +413,14 @@ class HostsTab(QWidget):
             return
         d = dlg.data()
         if not d["ip"] or not d["username"]:
-            QMessageBox.warning(self, "Ошибка", "IP и пользователь обязательны")
+            QMessageBox.warning(self, t("error"), t("hosts_deploy_required"))
             return
         if self._deploy_worker is not None and self._deploy_worker.isRunning():
-            self._status.setText("Деплой уже выполняется...")
+            self._status.setText(t("hosts_deploy_running"))
             return
         self._btn_deploy.setEnabled(False)
         self._prog.setVisible(True)
-        self._status.setText("Деплой агента...")
+        self._status.setText(t("hosts_deploying"))
         self._deploy_worker = DeployWorker(d["ip"], d["username"], d["password"])
         self._deploy_worker.progress.connect(self._status.setText)
         self._deploy_worker.error.connect(self._on_deploy_error)
@@ -401,13 +431,12 @@ class HostsTab(QWidget):
         self._deploy_worker.start()
 
     def _on_deploy_done(self, ip: str, token: str):
-        self._status.setText(f"✔ Агент задеплоен на {ip}. Токен получен.")
+        self._status.setText(t("hosts_deploy_done_status", ip=ip))
         QMessageBox.information(
-            self, "Деплой завершён",
-            f"Агент установлен на {ip}\n\nТокен:\n{token}\n\n"
-            "Нажми '+ Добавить' и введи этот токен для добавления хоста.",
+            self, t("hosts_deploy_done_title"),
+            t("hosts_deploy_done_msg", ip=ip, tok=token),
         )
 
     def _on_deploy_error(self, msg: str):
-        self._status.setText(f"✘ Деплой: {msg}")
-        QMessageBox.warning(self, "Ошибка деплоя", msg)
+        self._status.setText(t("hosts_error", msg=msg))
+        QMessageBox.warning(self, t("hosts_deploy_error_title"), msg)
