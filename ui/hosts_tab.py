@@ -91,6 +91,7 @@ class HostsTab(QWidget):
         self._deploy_worker: DeployWorker | None = None
         self._proc_worker: RemoteProcessListWorker | None = None
         self._mem_worker:  RemoteMemScanWorker | None = None
+        self._mem_stop_requested: bool = False
         self._file_custom_rules: dict = {}
         self._mem_custom_rules:  dict = {}
         self._remote_procs: list = []
@@ -353,6 +354,10 @@ class HostsTab(QWidget):
         m = re.search(r'rule\s+(\w+)', text)
         name = m.group(1) if m else f"Custom_{len(custom_store) + 1}"
         custom_store[name] = text
+        for i in range(rule_list.count()):
+            if rule_list.item(i).text() == name:
+                text_edit.clear()
+                return
         item = QListWidgetItem(name)
         item.setCheckState(Qt.CheckState.Checked)
         item.setForeground(QColor("#58a6ff"))
@@ -390,6 +395,9 @@ class HostsTab(QWidget):
             self._host_list.addItem(item)
 
     def _on_host_select(self, row: int):
+        self._mem_proc_tbl.setRowCount(0)
+        self._remote_procs = []
+        self._mem_proc_count.setText("Процессов: 0")
         if row < 0:
             self._selected_id = None
             self._btn_remove.setEnabled(False)
@@ -532,7 +540,6 @@ class HostsTab(QWidget):
             self._btn_scan.setEnabled(True), self._file_prog.setVisible(False)
         ))
         self._scan_worker.start()
-        update_host(host["id"], last_scan=datetime.now().strftime("%H:%M:%S"))
 
     # ── Memory scan ───────────────────────────────────────────────────
 
@@ -583,6 +590,7 @@ class HostsTab(QWidget):
             self._mem_status.setText("Выбери хотя бы одно правило")
             return
 
+        self._mem_stop_requested = False
         self._btn_mem_scan.setEnabled(False)
         self._btn_mem_stop.setEnabled(True)
         self._mem_prog.setVisible(True)
@@ -590,7 +598,9 @@ class HostsTab(QWidget):
 
         self._mem_worker = RemoteMemScanWorker(host, rules)
         self._mem_worker.progress.connect(self._mem_status.setText)
-        self._mem_worker.done.connect(lambda r: self._on_results_done(r, host))
+        self._mem_worker.done.connect(
+            lambda r: None if self._mem_stop_requested else self._on_results_done(r, host)
+        )
         self._mem_worker.error.connect(lambda m: self._mem_status.setText(f"Ошибка: {m}"))
         self._mem_worker.finished.connect(lambda: (
             self._btn_mem_scan.setEnabled(True),
@@ -600,6 +610,7 @@ class HostsTab(QWidget):
         self._mem_worker.start()
 
     def _stop_mem_scan(self):
+        self._mem_stop_requested = True
         if self._mem_worker:
             self._mem_worker.stop()
         self._btn_mem_stop.setEnabled(False)
@@ -607,7 +618,16 @@ class HostsTab(QWidget):
 
     # ── Shared results handler ────────────────────────────────────────
 
-    def _on_results_done(self, results: list, host: dict):
+    def _on_results_done(self, results: list, host: dict):  # noqa: ARG002 — host used in Task 5
+        ts = datetime.now().strftime("%H:%M:%S")
+        update_host(host["id"], last_scan=ts)
+        for i in range(self._host_list.count()):
+            item = self._host_list.item(i)
+            h = item.data(Qt.ItemDataRole.UserRole)
+            if h.get("id") == host.get("id"):
+                h["last_scan"] = ts
+                item.setData(Qt.ItemDataRole.UserRole, h)
+                break
         colors = {"YARA": "#58a6ff", "IOC": "#d29922",
                   "HASH": "#8b949e", "MEMORY": "#a371f7"}
         self._tbl.setRowCount(len(results))
@@ -633,7 +653,10 @@ class HostsTab(QWidget):
             )
 
         yara_hits = sum(1 for r in results if r.get("type") in ("YARA", "MEMORY"))
-        sus_procs = sum(1 for r in results if r.get("type") == "IOC")
+        sus_procs = sum(
+            1 for r in results
+            if r.get("type") == "IOC" and r.get("rule") == "Подозрит. процесс"
+        )
         DashboardTab.stats["yara_hits"]       += yara_hits
         DashboardTab.stats["suspicious_procs"] += sus_procs
 
