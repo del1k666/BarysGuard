@@ -47,7 +47,7 @@ class RemoteScanWorker(QThread):
         self._rules      = rules
 
     def run(self):
-        client  = AgentClient(self._host["ip"], self._host["port"], self._host["token"])
+        client  = AgentClient(self._host["ip"], self._host["port"], self._host["token"], timeout=120)
         results = []
         try:
             if "yara" in self._scan_types and self._rules:
@@ -90,6 +90,62 @@ class RemoteScanWorker(QThread):
                         "file": h.get("file", "?"),
                     })
 
+            self.done.emit(results)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RemoteProcessListWorker(QThread):
+    """Fetches running process list from remote agent."""
+    done  = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, host: dict):
+        super().__init__()
+        self._host = host
+
+    def run(self):
+        client = AgentClient(self._host["ip"], self._host["port"],
+                             self._host["token"], timeout=30)
+        try:
+            r = client.list_processes()
+            self.done.emit(r.get("processes", []))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class RemoteMemScanWorker(QThread):
+    """Runs /scan/memory/all on remote agent with selected YARA rules."""
+    progress = pyqtSignal(str)
+    done     = pyqtSignal(list)
+    error    = pyqtSignal(str)
+
+    def __init__(self, host: dict, rules: dict):
+        super().__init__()
+        self._host  = host
+        self._rules = rules
+
+    def stop(self):
+        self.requestInterruption()
+
+    def run(self):
+        client = AgentClient(self._host["ip"], self._host["port"],
+                             self._host["token"], timeout=180)
+        try:
+            self.progress.emit("Сканирование памяти процессов на удалённом хосте...")
+            r = client.scan_memory_all(self._rules)
+            if "error" in r:
+                self.error.emit(r["error"])
+                return
+            results = []
+            for m in r.get("matches", []):
+                results.append({
+                    "type":         "MEMORY",
+                    "rule":         m.get("rule", "?"),
+                    "file":         m.get("file", "?"),
+                    "pid":          str(m.get("pid", "?")),
+                    "process_name": m.get("process_name", "?"),
+                })
             self.done.emit(results)
         except Exception as e:
             self.error.emit(str(e))
