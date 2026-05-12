@@ -73,7 +73,8 @@ class ReportTab(QWidget):
         yara_events  = [e for e in events if e.get("type") == "YARA"]
         net_events   = [e for e in events if e.get("type") == "NET"]
         ioc_events   = [e for e in events if e.get("type") == "IOC"]
-        quar_events  = [e for e in events if e.get("type") == "QUARANTINE"]
+        quar_events    = [e for e in events if e.get("type") == "QUARANTINE"]
+        remote_events  = [e for e in events if e.get("host")]
 
         # Severity counts из YARA событий
         sev_counts = {"Critical":0,"High":0,"Medium":0,"Low":0}
@@ -91,8 +92,9 @@ class ReportTab(QWidget):
             "yara_events":  yara_events,
             "net_events":   net_events,
             "ioc_events":   ioc_events,
-            "quar_events":  quar_events,
-            "sev_counts":   sev_counts,
+            "quar_events":    quar_events,
+            "remote_events":  remote_events,
+            "sev_counts":     sev_counts,
             "total_events": len(events),
         }
 
@@ -164,6 +166,20 @@ class ReportTab(QWidget):
             lines.append("-" * 40)
             for e in d["quar_events"]:
                 lines.append(f"  {e.get('msg','')}")
+            lines.append("")
+
+        if d.get("remote_events"):
+            by_host: dict = {}
+            for e in d["remote_events"]:
+                by_host.setdefault(e.get("host", "Unknown"), []).append(e)
+            lines.append(f"УДАЛЁННЫЕ СКАНЫ ({len(d['remote_events'])})")
+            lines.append("-" * 40)
+            for host_name, evts in by_host.items():
+                lines.append(f"  Хост: {host_name}")
+                for e in evts:
+                    lines.append(
+                        f"    [{e.get('type','?')}] {e.get('time','')}  {e.get('msg','')}"
+                    )
             lines.append("")
 
         if self.chk_yara_rules.isChecked():
@@ -283,6 +299,30 @@ tr:hover td{{background:#1c2128;}}
 <div class="section"><table>
 <tr><th>Цель</th><th>Результат</th></tr>
 {net_rows}</table></div>"""
+
+        if d.get("remote_events"):
+            by_host: dict = {}
+            for e in d["remote_events"]:
+                by_host.setdefault(e.get("host", "Unknown"), []).append(e)
+            rem_colors = {"YARA": "#58a6ff", "IOC": "#d29922",
+                          "MEMORY": "#a371f7", "HASH": "#8b949e"}
+            remote_rows = ""
+            for host_name, evts in by_host.items():
+                for e in evts:
+                    typ = e.get("type", "?")
+                    col = rem_colors.get(typ, "#8b949e")
+                    remote_rows += (
+                        f'<tr><td>{e.get("time","")}</td>'
+                        f'<td style="color:#58a6ff">{host_name}</td>'
+                        f'<td style="color:{col}">{typ}</td>'
+                        f'<td>{e.get("msg","")}</td></tr>\n'
+                    )
+            html += (
+                f'<h2>Удалённые сканы ({len(d["remote_events"])})</h2>'
+                f'<div class="section"><table>'
+                f'<tr><th>Время</th><th>Хост</th><th>Тип</th><th>Правило / Файл</th></tr>'
+                f'{remote_rows}</table></div>'
+            )
 
         if self.chk_yara_rules.isChecked():
             yara_rule_rows = ""
