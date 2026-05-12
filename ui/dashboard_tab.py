@@ -87,6 +87,19 @@ class DashboardTab(QWidget):
         gt.addWidget(self.tbl)
         lay.addWidget(grp_tbl)
 
+        grp_remote = QGroupBox("Удалённые сканы")
+        gr_rem = QVBoxLayout(grp_remote)
+        self.remote_tbl = QTableWidget(0, 4)
+        self.remote_tbl.setHorizontalHeaderLabels(["Время", "Хост", "Тип", "Правило / Файл"])
+        self.remote_tbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.remote_tbl.horizontalHeader().resizeSection(0, 70)
+        self.remote_tbl.horizontalHeader().resizeSection(1, 160)
+        self.remote_tbl.horizontalHeader().resizeSection(2, 80)
+        self.remote_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.remote_tbl.setMaximumHeight(180)
+        gr_rem.addWidget(self.remote_tbl)
+        lay.addWidget(grp_remote)
+
     def _stat_card(self, title, value, color):
         f = QFrame()
         f.setStyleSheet("QFrame{background:#161b22;border:1px solid #21262d;border-radius:8px;}")
@@ -132,6 +145,26 @@ class DashboardTab(QWidget):
             bar.setValue(int(n/total*100))
             cnt.setText(str(n))
 
+        # Remote scans table
+        remote_events = [e for e in s["recent"] if e.get("host")]
+        self.remote_tbl.setRowCount(0)
+        rem_colors = {"YARA": "#58a6ff", "IOC": "#d29922",
+                      "MEMORY": "#a371f7", "HASH": "#8b949e"}
+        for evt in reversed(remote_events[-20:]):
+            row = self.remote_tbl.rowCount()
+            self.remote_tbl.insertRow(row)
+            typ = evt.get("type", "")
+            col = rem_colors.get(typ, "#8b949e")
+            for i, txt in enumerate([
+                evt.get("time", ""), evt.get("host", ""),
+                typ, evt.get("msg", ""),
+            ]):
+                item = QTableWidgetItem(txt)
+                item.setFont(QFont("Consolas", 11))
+                if i in (2, 3):
+                    item.setForeground(QColor(col))
+                self.remote_tbl.setItem(row, i, item)
+
         # Recent table
         recent_scans = [e for e in s["recent"] if e.get("scan")]
         self.tbl.setRowCount(0)
@@ -150,12 +183,12 @@ class DashboardTab(QWidget):
                 self.tbl.setItem(row, i, item)
 
     @staticmethod
-    def log_event(type_, msg, level="info", severity="", target="", scan=False):
+    def log_event(type_, msg, level="info", severity="", target="", scan=False, host=""):
         import datetime
         DashboardTab.stats["recent"].append({
             "time": datetime.datetime.now().strftime("%H:%M:%S"),
             "type": type_, "msg": msg, "level": level,
-            "severity": severity, "target": target, "scan": scan
+            "severity": severity, "target": target, "scan": scan, "host": host,
         })
         if len(DashboardTab.stats["recent"]) > 200:
             DashboardTab.stats["recent"] = DashboardTab.stats["recent"][-200:]

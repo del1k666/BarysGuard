@@ -618,8 +618,9 @@ class HostsTab(QWidget):
 
     # ── Shared results handler ────────────────────────────────────────
 
-    def _on_results_done(self, results: list, host: dict):  # noqa: ARG002 — host used in Task 5
+    def _on_results_done(self, results: list, host: dict):
         ts = datetime.now().strftime("%H:%M:%S")
+        host_label = f"{host['name']} ({host['ip']})"
         update_host(host["id"], last_scan=ts)
         for i in range(self._host_list.count()):
             item = self._host_list.item(i)
@@ -649,7 +650,7 @@ class HostsTab(QWidget):
             DashboardTab.log_event(
                 typ, f"{rule} — {fil}",
                 level="high", severity=r.get("severity", typ),
-                scan=True, target=fil[:60],
+                scan=True, target=fil[:60], host=host_label,
             )
 
         yara_hits = sum(1 for r in results if r.get("type") in ("YARA", "MEMORY"))
