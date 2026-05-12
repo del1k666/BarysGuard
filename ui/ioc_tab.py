@@ -81,8 +81,6 @@ class IOCTab(QWidget):
             if "Total:" in line:
                 m = re.search(r"Total:\s*(\d+).*Suspicious:\s*(\d+)", line)
                 if m:
-                    self.sp.findChild(QLabel).__class__  # noqa
-                    # update stat labels
                     cards = self.findChildren(QFrame)
                     for c in cards:
                         lbls = c.findChildren(QLabel)

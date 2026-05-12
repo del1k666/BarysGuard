@@ -252,11 +252,17 @@ class HostsTab(QWidget):
         opt_row = QHBoxLayout()
         self._chk_ioc    = QCheckBox("IOC сбор");   self._chk_ioc.setChecked(True)
         self._chk_hashes = QCheckBox(t("hosts_hashes_chk"))
-        self._lbl_path   = QLabel("Путь:")
+        self._lbl_path   = QLabel("Путь (remote):")
         self._path_inp   = QLineEdit(); self._path_inp.setText(r"C:\Users")
+        self._path_inp.setToolTip(
+            "Путь к папке на удалённом хосте.\n"
+            "Вводите вручную — браузер открывает локальные папки,\n"
+            "а сканирование выполняется на удалённой машине."
+        )
         btn_browse = QPushButton("...")
         btn_browse.setObjectName("secondaryBtn")
         btn_browse.setFixedWidth(32)
+        btn_browse.setToolTip("Открыть локальный браузер папок (для справки)")
         btn_browse.clicked.connect(self._browse_path)
         opt_row.addWidget(self._chk_ioc)
         opt_row.addWidget(self._chk_hashes)
@@ -514,7 +520,7 @@ class HostsTab(QWidget):
         self._btn_ping.setText("⟳ " + t("hosts_ping_btn"))
         self._btn_scan.setText("▶  Сканировать")
         self._chk_hashes.setText(t("hosts_hashes_chk"))
-        self._lbl_path.setText("Путь:")
+        self._lbl_path.setText("Путь (remote):")
         self._tbl.setHorizontalHeaderLabels(["ТИП / ПРАВИЛО", "SEVERITY", "ФАЙЛ / ПРОЦЕСС"])
         if self._info_label.text() in (
             "Выбери хост слева", "Select a host on the left",

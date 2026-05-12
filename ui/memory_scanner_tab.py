@@ -84,9 +84,9 @@ class MemoryScannerTab(QWidget):
         # Добавляем все правила
         for name in BUILTIN_YARA_RULES:
             item = QListWidgetItem(name)
-            item.setCheckState(Qt.CheckState.Checked)
+            item.setCheckState(Qt.CheckState.Unchecked)
             self.rule_list.addItem(item)
-        chk_all_btn = QCheckBox("Все правила"); chk_all_btn.setChecked(True)
+        chk_all_btn = QCheckBox("Все правила"); chk_all_btn.setChecked(False)
         chk_all_btn.stateChanged.connect(self._toggle_rules)
         gr.addWidget(chk_all_btn); gr.addWidget(self.rule_list)
         rl.addWidget(grp_r)
