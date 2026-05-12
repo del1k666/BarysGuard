@@ -310,38 +310,51 @@ def scan_memory_all():
             pass
 
     matches = []
-    for proc in processes:
-        for rule_name, rule_text in rules_dict.items():
-            tmp_path = None
-            try:
-                fd, tmp_path = tempfile.mkstemp(suffix=".yar")
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(rule_text)
-                r = subprocess.run(
-                    [YARA_EXE, tmp_path, proc["exe"]],
-                    capture_output=True, text=True, timeout=15,
-                    encoding="utf-8", errors="replace",
-                )
-                for line in r.stdout.strip().splitlines():
-                    line = line.strip()
-                    if line and " " in line:
-                        parts = line.split(" ", 1)
-                        matches.append({
-                            "rule":         parts[0],
-                            "file":         parts[1],
-                            "pid":          proc["pid"],
-                            "process_name": proc["name"],
-                        })
-            except subprocess.TimeoutExpired:
-                pass
-            except Exception:
-                pass
-            finally:
-                if tmp_path and os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except Exception:
-                        pass
+    for _rule_name, rule_text in rules_dict.items():
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".yar")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(rule_text)
+            for proc in processes:
+                try:
+                    r = subprocess.run(
+                        [YARA_EXE, tmp_path, proc["exe"]],
+                        capture_output=True, text=True, timeout=15,
+                        encoding="utf-8", errors="replace",
+                    )
+                    for line in r.stdout.strip().splitlines():
+                        line = line.strip()
+                        if line and " " in line:
+                            parts = line.split(" ", 1)
+                            matches.append({
+                                "rule":         parts[0],
+                                "file":         parts[1],
+                                "pid":          proc["pid"],
+                                "process_name": proc["name"],
+                            })
+                except subprocess.TimeoutExpired:
+                    matches.append({
+                        "rule": "TIMEOUT",
+                        "file": proc["exe"],
+                        "pid":  proc["pid"],
+                        "process_name": proc["name"],
+                    })
+                except Exception as e:
+                    matches.append({
+                        "rule": "ERROR",
+                        "file": str(e),
+                        "pid":  proc["pid"],
+                        "process_name": proc["name"],
+                    })
+        except Exception as e:
+            matches.append({"rule": "COMPILE_ERR", "file": str(e), "pid": 0, "process_name": ""})
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
     return jsonify({"matches": matches})
 
