@@ -377,6 +377,75 @@ def scan_hashes():
     return jsonify({"hashes": items})
 
 
+# ── Network Isolation ──────────────────────────────────────────────────────
+_ISOLATE_PREFIX = "IOCIsolate"
+
+
+@app.route("/network/status", methods=["GET"])
+@_auth
+def network_status():
+    try:
+        r = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule",
+             f"name={_ISOLATE_PREFIX}_BlockOut"],
+            capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+        )
+        isolated = r.returncode == 0 and _ISOLATE_PREFIX in r.stdout
+        return jsonify({"isolated": isolated})
+    except Exception as e:
+        return jsonify({"isolated": False, "error": str(e)})
+
+
+@app.route("/network/isolate", methods=["POST"])
+@_auth
+def network_isolate():
+    data    = request.get_json(silent=True) or {}
+    mgmt_ip = data.get("mgmt_ip", "").strip()
+    errs    = []
+
+    def _fw(cmd):
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=15, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            errs.append((r.stderr or r.stdout).strip()[:200])
+
+    # Add allow rules for management IP first (more specific → wins over block)
+    if mgmt_ip:
+        _fw(["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={_ISOLATE_PREFIX}_AllowMgmt_In",
+             "dir=in", "action=allow", f"remoteip={mgmt_ip}",
+             "profile=any", "enable=yes"])
+        _fw(["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={_ISOLATE_PREFIX}_AllowMgmt_Out",
+             "dir=out", "action=allow", f"remoteip={mgmt_ip}",
+             "profile=any", "enable=yes"])
+
+    # Block all remaining traffic
+    _fw(["netsh", "advfirewall", "firewall", "add", "rule",
+         f"name={_ISOLATE_PREFIX}_BlockIn",
+         "dir=in", "action=block", "profile=any", "enable=yes"])
+    _fw(["netsh", "advfirewall", "firewall", "add", "rule",
+         f"name={_ISOLATE_PREFIX}_BlockOut",
+         "dir=out", "action=block", "profile=any", "enable=yes"])
+
+    if errs:
+        return jsonify({"status": "error", "errors": errs}), 500
+    return jsonify({"status": "isolated", "mgmt_ip": mgmt_ip})
+
+
+@app.route("/network/restore", methods=["POST"])
+@_auth
+def network_restore():
+    for suffix in ("AllowMgmt_In", "AllowMgmt_Out", "BlockIn", "BlockOut"):
+        subprocess.run(
+            ["netsh", "advfirewall", "firewall", "delete", "rule",
+             f"name={_ISOLATE_PREFIX}_{suffix}"],
+            capture_output=True, timeout=10,
+        )
+    return jsonify({"status": "restored"})
+
+
 def _collect_files(path: str) -> list:
     if os.path.isfile(path):
         return [path]

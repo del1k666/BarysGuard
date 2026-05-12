@@ -54,3 +54,12 @@ class AgentClient:
 
     def scan_memory_all(self, rules: dict) -> dict:
         return self._post("/scan/memory/all", {"rules": rules})
+
+    def network_status(self) -> dict:
+        return self._get("/network/status")
+
+    def network_isolate(self, mgmt_ip: str = "") -> dict:
+        return self._post("/network/isolate", {"mgmt_ip": mgmt_ip})
+
+    def network_restore(self) -> dict:
+        return self._post("/network/restore", {})

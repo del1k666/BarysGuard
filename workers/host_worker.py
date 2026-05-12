@@ -258,3 +258,32 @@ class DeployWorker(QThread):
             self.done.emit(token)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class NetworkIsolationWorker(QThread):
+    """Runs a single network isolation action on a remote host."""
+    done  = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, host: dict, action: str, mgmt_ip: str = ""):
+        """
+        action: "status" | "isolate" | "restore"
+        """
+        super().__init__()
+        self._host    = host
+        self._action  = action
+        self._mgmt_ip = mgmt_ip
+
+    def run(self):
+        client = AgentClient(self._host["ip"], self._host["port"],
+                             self._host["token"], timeout=30)
+        try:
+            if self._action == "isolate":
+                r = client.network_isolate(self._mgmt_ip)
+            elif self._action == "restore":
+                r = client.network_restore()
+            else:
+                r = client.network_status()
+            self.done.emit(r)
+        except Exception as e:
+            self.error.emit(str(e))
