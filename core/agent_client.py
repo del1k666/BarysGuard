@@ -51,3 +51,6 @@ class AgentClient:
 
     def list_processes(self) -> dict:
         return self._post("/scan/memory", {"pid": 0, "rules": {}})
+
+    def scan_memory_all(self, rules: dict) -> dict:
+        return self._post("/scan/memory/all", {"rules": rules})

@@ -45,3 +45,17 @@ def test_unauthorized_raises(client):
     with patch("requests.get", return_value=mock_resp):
         with pytest.raises(requests.HTTPError):
             client.ping()
+
+
+def test_scan_memory_all_returns_matches(client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "matches": [{"rule": "Mimikatz_Generic", "file": "C:\\lsass.exe",
+                     "pid": 800, "process_name": "lsass.exe"}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.post", return_value=mock_resp):
+        result = client.scan_memory_all({"Mimikatz": "rule Mimikatz_Generic { condition: false }"})
+    assert result["matches"][0]["rule"] == "Mimikatz_Generic"
+    assert result["matches"][0]["pid"] == 800
