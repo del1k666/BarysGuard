@@ -285,6 +285,67 @@ def scan_memory():
     return jsonify({"matches": matches})
 
 
+@app.route("/scan/memory/all", methods=["POST"])
+@_auth
+def scan_memory_all():
+    data       = request.json or {}
+    rules_dict = data.get("rules", {})
+
+    if not rules_dict:
+        return jsonify({"error": "no rules"}), 400
+    if not YARA_EXE:
+        return jsonify({"error": "yara64.exe not found on agent"}), 400
+
+    processes = []
+    for p in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            exe = p.info.get("exe") or ""
+            if exe and os.path.isfile(exe):
+                processes.append({
+                    "pid":  p.info["pid"],
+                    "name": p.info["name"],
+                    "exe":  exe,
+                })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    matches = []
+    for proc in processes:
+        for rule_name, rule_text in rules_dict.items():
+            tmp_path = None
+            try:
+                fd, tmp_path = tempfile.mkstemp(suffix=".yar")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(rule_text)
+                r = subprocess.run(
+                    [YARA_EXE, tmp_path, proc["exe"]],
+                    capture_output=True, text=True, timeout=15,
+                    encoding="utf-8", errors="replace",
+                )
+                for line in r.stdout.strip().splitlines():
+                    line = line.strip()
+                    if line and " " in line:
+                        parts = line.split(" ", 1)
+                        matches.append({
+                            "rule":         parts[0],
+                            "file":         parts[1],
+                            "pid":          proc["pid"],
+                            "process_name": proc["name"],
+                        })
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception:
+                pass
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+    return jsonify({"matches": matches})
+
+
 @app.route("/scan/hashes", methods=["POST"])
 @_auth
 def scan_hashes():
