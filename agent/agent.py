@@ -298,15 +298,12 @@ def scan_memory_all():
         return jsonify({"error": "yara64.exe not found on agent"}), 400
 
     processes = []
-    for p in psutil.process_iter(["pid", "name", "exe"]):
+    for p in psutil.process_iter(["pid", "name"]):
         try:
-            exe = p.info.get("exe") or ""
-            if exe and os.path.isfile(exe):
-                processes.append({
-                    "pid":  p.info["pid"],
-                    "name": p.info["name"],
-                    "exe":  exe,
-                })
+            processes.append({
+                "pid":  p.info["pid"],
+                "name": p.info["name"],
+            })
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -320,7 +317,7 @@ def scan_memory_all():
             for proc in processes:
                 try:
                     r = subprocess.run(
-                        [YARA_EXE, tmp_path, proc["exe"]],
+                        [YARA_EXE, tmp_path, str(proc["pid"])],
                         capture_output=True, text=True, timeout=15,
                         encoding="utf-8", errors="replace",
                     )
@@ -337,7 +334,7 @@ def scan_memory_all():
                 except subprocess.TimeoutExpired:
                     matches.append({
                         "rule": "TIMEOUT",
-                        "file": proc["exe"],
+                        "file": f"pid:{proc['pid']}",
                         "pid":  proc["pid"],
                         "process_name": proc["name"],
                     })
