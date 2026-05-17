@@ -1,10 +1,14 @@
 import sys
 import os
+from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 from styles import STYLE
 from ui.main_window import MainWindow
+
+_ICON = str(Path(__file__).parent / "docs" / "img" / "image.png")
 
 
 def main():
@@ -12,7 +16,8 @@ def main():
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
         app.setStyleSheet(STYLE)
-        app.setApplicationName("IOC Analyzer v2.0")
+        app.setApplicationName("BarysGuard")
+        app.setWindowIcon(QIcon(_ICON))
         w = MainWindow()
         w.show()
         sys.exit(app.exec())

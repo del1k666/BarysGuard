@@ -1,0 +1,13 @@
+{
+  "vt_api_key": "VT_KEY_REMOVED",
+  "abuseipdb_key": "ABUSEIPDB_KEY_REMOVED",
+  "groq_key": "GROQ_KEY_REMOVED",
+  "claude_key": "",
+  "ai_provider": "groq",
+  "results_dir": "C:/Tools/results",
+  "quarantine_dir": "C:/Tools/quarantine",
+  "vt_rate_limit_sec": 15,
+  "auto_save_reports": false,
+  "theme": "dark",
+  "language": "rus"
+}

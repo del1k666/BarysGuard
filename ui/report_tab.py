@@ -25,7 +25,7 @@ class ReportTab(QWidget):
         row1.addWidget(QLabel("Аналитик:"))
         self.analyst = QLineEdit("Аналитик"); row1.addWidget(self.analyst)
         row1.addWidget(QLabel("Организация:"))
-        self.org = QLineEdit("IOC Analyzer"); row1.addWidget(self.org)
+        self.org = QLineEdit("BarysGuard"); row1.addWidget(self.org)
         gl.addLayout(row1)
 
         row2 = QHBoxLayout()
@@ -261,7 +261,7 @@ tr:hover td{{background:#1c2128;}}
 <div class="meta-row"><span class="meta-key">Аналитик</span><span class="meta-val">{d['analyst']}</span></div>
 <div class="meta-row"><span class="meta-key">Организация</span><span class="meta-val">{d['org']}</span></div>
 <div class="meta-row"><span class="meta-key">Дата формирования</span><span class="meta-val">{d['date']}</span></div>
-<div class="meta-row"><span class="meta-key">Инструмент</span><span class="meta-val">IOC Analyzer v2.0</span></div>
+<div class="meta-row"><span class="meta-key">Инструмент</span><span class="meta-val">BarysGuard</span></div>
 </div>
 
 <h2>Статистика сессии</h2>
@@ -337,7 +337,7 @@ tr:hover td{{background:#1c2128;}}
 <tr><th>Правило</th><th>Severity</th><th>Описание</th></tr>
 {yara_rule_rows}</table></div>"""
 
-        html += f'''<div class="footer">Сформировано: {d['date']} | IOC Analyzer v2.0 | {d['org']}</div>
+        html += f'''<div class="footer">Сформировано: {d['date']} | BarysGuard | {d['org']}</div>
 </body></html>'''
 
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить HTML отчёт", "report.html", "HTML (*.html)")

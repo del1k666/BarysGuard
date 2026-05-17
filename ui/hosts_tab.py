@@ -139,7 +139,7 @@ class HostsTab(QWidget):
         ll.addWidget(self._host_list, 1)
 
         row_btns = QHBoxLayout()
-        self._btn_add = QPushButton("+ " + t("hosts_add_btn"))
+        self._btn_add = QPushButton(t("hosts_add_btn"))
         self._btn_add.setObjectName("secondaryBtn")
         self._btn_add.clicked.connect(self._add_host)
         self._btn_remove = QPushButton(t("hosts_remove_btn"))
@@ -239,8 +239,24 @@ class HostsTab(QWidget):
 
     # ── Tab 1: Файловый скан ──────────────────────────────────────────────────
 
+    _INNER_TAB_STYLE = (
+        "QTabBar::tab{padding:5px 14px;font-size:11px;}"
+        "QTabBar::tab:selected{font-weight:bold;color:#58a6ff;}"
+        "QTabBar::tab:!selected{color:#6e7681;}"
+        "QTabWidget::pane{border:1px solid #21262d;border-radius:4px;margin-top:2px;}")
+
     def _build_file_tab(self) -> QWidget:
-        w   = QWidget(); lay = QVBoxLayout(w)
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        inner = QTabWidget()
+        inner.setStyleSheet(self._INNER_TAB_STYLE)
+        inner.addTab(self._build_file_scan_tab(),  "⚙  Сканирование")
+        inner.addTab(self._build_file_rules_tab(), "📝  Свои правила")
+        lay.addWidget(inner, 1)
+        return w
+
+    def _build_file_scan_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
         lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(6)
 
         grp_rules = QGroupBox("YARA ПРАВИЛА")
@@ -257,8 +273,13 @@ class HostsTab(QWidget):
             self._update_rule_count(self._file_rule_list, self._file_rule_count)))
         self._file_rule_count = QLabel("0 / 0 правил")
         self._file_rule_count.setStyleSheet("color:#6e7681;font-size:11px;")
+        self._file_rule_filter = QLineEdit()
+        self._file_rule_filter.setPlaceholderText("🔍  Поиск...")
+        self._file_rule_filter.setFixedHeight(26)
+        self._file_rule_filter.textChanged.connect(self._filter_file_rules)
         top_row.addWidget(btn_all); top_row.addWidget(btn_none)
-        top_row.addStretch(); top_row.addWidget(self._file_rule_count)
+        top_row.addWidget(self._file_rule_filter, 1)
+        top_row.addWidget(self._file_rule_count)
         gr.addLayout(top_row)
 
         self._file_rule_list = QListWidget()
@@ -270,19 +291,7 @@ class HostsTab(QWidget):
             lambda: self._update_rule_count(self._file_rule_list, self._file_rule_count))
         self._update_rule_count(self._file_rule_list, self._file_rule_count)
         gr.addWidget(self._file_rule_list)
-        lay.addWidget(grp_rules, 3)
-
-        grp_custom = QGroupBox("СВОЁ ПРАВИЛО")
-        gc = QHBoxLayout(grp_custom); gc.setContentsMargins(8, 8, 8, 8)
-        self._file_rule_edit = QTextEdit()
-        self._file_rule_edit.setMaximumHeight(60)
-        self._file_rule_edit.setPlaceholderText('rule MyRule { strings: $s = "evil" condition: $s }')
-        btn_add_f = QPushButton("➕ Добавить"); btn_add_f.setObjectName("secondaryBtn")
-        btn_add_f.setFixedWidth(100); btn_add_f.setFixedHeight(60)
-        btn_add_f.clicked.connect(lambda: self._add_custom_rule(
-            self._file_rule_edit, self._file_rule_list, self._file_custom_rules))
-        gc.addWidget(self._file_rule_edit); gc.addWidget(btn_add_f)
-        lay.addWidget(grp_custom)
+        lay.addWidget(grp_rules, 1)
 
         opt_row = QHBoxLayout()
         self._chk_ioc    = QCheckBox("IOC сбор"); self._chk_ioc.setChecked(True)
@@ -315,34 +324,108 @@ class HostsTab(QWidget):
         lay.addWidget(self._btn_scan)
         return w
 
+    def _build_file_rules_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(8)
+
+        hdr = QLabel("ПОЛЬЗОВАТЕЛЬСКИЕ YARA ПРАВИЛА")
+        hdr.setStyleSheet("color:#6e7681;font-size:11px;font-weight:bold;letter-spacing:0.5px;")
+        lay.addWidget(hdr)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # ── Left: list of added custom rules ─────────────────────────────
+        left_w = QWidget(); ll = QVBoxLayout(left_w)
+        ll.setContentsMargins(0, 0, 6, 0); ll.setSpacing(4)
+        lbl_l = QLabel("Добавленные правила")
+        lbl_l.setStyleSheet("color:#8b949e;font-size:11px;")
+        ll.addWidget(lbl_l)
+        self._file_custom_list = QListWidget()
+        self._file_custom_list.setStyleSheet(
+            "QListWidget{background:#0a0e14;border:1px solid #21262d;border-radius:4px;}")
+        self._file_custom_list.currentRowChanged.connect(
+            lambda _: self._load_custom_rule(
+                self._file_custom_list, self._file_rule_edit, self._file_custom_rules))
+        ll.addWidget(self._file_custom_list, 1)
+        btn_del_f = QPushButton("🗑  Удалить правило")
+        btn_del_f.setObjectName("dangerBtn"); btn_del_f.setFixedHeight(30)
+        btn_del_f.clicked.connect(lambda: self._delete_custom_rule(
+            self._file_custom_list, self._file_rule_list,
+            self._file_custom_rules, self._file_rule_edit))
+        ll.addWidget(btn_del_f)
+        splitter.addWidget(left_w)
+
+        # ── Right: code editor ───────────────────────────────────────────
+        right_w = QWidget(); rl = QVBoxLayout(right_w)
+        rl.setContentsMargins(6, 0, 0, 0); rl.setSpacing(4)
+        lbl_r = QLabel("Редактор YARA правила")
+        lbl_r.setStyleSheet("color:#8b949e;font-size:11px;")
+        rl.addWidget(lbl_r)
+        self._file_rule_edit = QTextEdit()
+        self._file_rule_edit.setStyleSheet(
+            "background:#0a0e14;border:1px solid #21262d;border-radius:4px;"
+            "font-family:Consolas,monospace;font-size:12px;color:#c9d1d9;padding:8px;")
+        self._file_rule_edit.setPlaceholderText(
+            "rule MyRule {\n"
+            "    meta:\n"
+            "        description = \"My custom rule\"\n"
+            "    strings:\n"
+            "        $s1 = \"pattern\" ascii nocase\n"
+            "    condition:\n"
+            "        any of them\n"
+            "}")
+        rl.addWidget(self._file_rule_edit, 1)
+
+        btn_add_f = QPushButton("➕  Добавить / Обновить правило")
+        btn_add_f.setObjectName("secondaryBtn"); btn_add_f.setFixedHeight(34)
+        btn_add_f.clicked.connect(lambda: self._add_custom_rule(
+            self._file_rule_edit, self._file_rule_list,
+            self._file_custom_rules, self._file_custom_list))
+        rl.addWidget(btn_add_f)
+        splitter.addWidget(right_w)
+
+        splitter.setSizes([200, 520])
+        lay.addWidget(splitter, 1)
+        return w
+
     # ── Tab 2: Memory Scan ────────────────────────────────────────────────────
 
     def _build_memory_tab(self) -> QWidget:
-        w   = QWidget(); lay = QVBoxLayout(w)
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        inner = QTabWidget()
+        inner.setStyleSheet(self._INNER_TAB_STYLE)
+        inner.addTab(self._build_mem_scan_tab(),  "⚙  Сканирование")
+        inner.addTab(self._build_mem_rules_tab(), "📝  Свои правила")
+        lay.addWidget(inner, 1)
+        return w
+
+    def _build_mem_scan_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
         lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(6)
 
         proc_ctrl = QHBoxLayout()
         self._btn_refresh_procs = QPushButton("⟳  Обновить процессы")
         self._btn_refresh_procs.setObjectName("secondaryBtn"); self._btn_refresh_procs.setFixedHeight(32)
         self._btn_refresh_procs.clicked.connect(self._refresh_remote_procs)
-        self._mem_filter = QLineEdit(); self._mem_filter.setPlaceholderText("Фильтр по имени...")
+        self._mem_filter = QLineEdit(); self._mem_filter.setPlaceholderText("Фильтр по процессу...")
         self._mem_filter.textChanged.connect(self._filter_remote_procs)
         self._mem_proc_count = QLabel("0 процессов")
         self._mem_proc_count.setStyleSheet("color:#6e7681;font-size:11px;")
         proc_ctrl.addWidget(self._btn_refresh_procs)
-        proc_ctrl.addWidget(self._mem_filter)
+        proc_ctrl.addWidget(self._mem_filter, 1)
         proc_ctrl.addWidget(self._mem_proc_count)
         lay.addLayout(proc_ctrl)
 
         grp_procs = QGroupBox("ПРОЦЕССЫ УДАЛЁННОГО ХОСТА")
-        gp = QVBoxLayout(grp_procs)
+        gp = QVBoxLayout(grp_procs); gp.setContentsMargins(8, 6, 8, 6)
         self._mem_proc_tbl = QTableWidget(0, 3)
         self._mem_proc_tbl.setHorizontalHeaderLabels(["PID", "Имя", "Путь к EXE"])
         self._mem_proc_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._mem_proc_tbl.horizontalHeader().resizeSection(0, 55)
         self._mem_proc_tbl.horizontalHeader().resizeSection(1, 150)
         self._mem_proc_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._mem_proc_tbl.setMaximumHeight(140)
+        self._mem_proc_tbl.setMaximumHeight(130)
         gp.addWidget(self._mem_proc_tbl)
         lay.addWidget(grp_procs)
 
@@ -359,12 +442,16 @@ class HostsTab(QWidget):
             self._update_rule_count(self._mem_rule_list, self._mem_rule_count)))
         self._mem_rule_count = QLabel("0 / 0 правил")
         self._mem_rule_count.setStyleSheet("color:#6e7681;font-size:11px;")
+        self._mem_rule_filter = QLineEdit()
+        self._mem_rule_filter.setPlaceholderText("🔍  Поиск...")
+        self._mem_rule_filter.setFixedHeight(26)
+        self._mem_rule_filter.textChanged.connect(self._filter_mem_rules)
         top_row_m.addWidget(btn_all_m); top_row_m.addWidget(btn_none_m)
-        top_row_m.addStretch(); top_row_m.addWidget(self._mem_rule_count)
+        top_row_m.addWidget(self._mem_rule_filter, 1)
+        top_row_m.addWidget(self._mem_rule_count)
         gr_m.addLayout(top_row_m)
 
         self._mem_rule_list = QListWidget()
-        self._mem_rule_list.setMaximumHeight(130)
         for name in BUILTIN_YARA_RULES:
             item = QListWidgetItem(name)
             item.setCheckState(Qt.CheckState.Unchecked)
@@ -373,19 +460,7 @@ class HostsTab(QWidget):
             lambda: self._update_rule_count(self._mem_rule_list, self._mem_rule_count))
         self._update_rule_count(self._mem_rule_list, self._mem_rule_count)
         gr_m.addWidget(self._mem_rule_list)
-
-        grp_custom_m = QGroupBox("СВОЁ ПРАВИЛО")
-        gc_m = QHBoxLayout(grp_custom_m); gc_m.setContentsMargins(8, 8, 8, 8)
-        self._mem_rule_edit = QTextEdit()
-        self._mem_rule_edit.setMaximumHeight(50)
-        self._mem_rule_edit.setPlaceholderText('rule MyRule { strings: $s = "evil" condition: $s }')
-        btn_add_m = QPushButton("➕ Добавить"); btn_add_m.setObjectName("secondaryBtn")
-        btn_add_m.setFixedWidth(100); btn_add_m.setFixedHeight(50)
-        btn_add_m.clicked.connect(lambda: self._add_custom_rule(
-            self._mem_rule_edit, self._mem_rule_list, self._mem_custom_rules))
-        gc_m.addWidget(self._mem_rule_edit); gc_m.addWidget(btn_add_m)
-        gr_m.addWidget(grp_custom_m)
-        lay.addWidget(grp_rules_m)
+        lay.addWidget(grp_rules_m, 1)
 
         self._mem_prog = QProgressBar()
         self._mem_prog.setRange(0, 0); self._mem_prog.setFixedHeight(4)
@@ -405,6 +480,70 @@ class HostsTab(QWidget):
         self._btn_mem_stop.clicked.connect(self._stop_mem_scan)
         scan_row.addWidget(self._btn_mem_scan); scan_row.addWidget(self._btn_mem_stop)
         lay.addLayout(scan_row)
+        return w
+
+    def _build_mem_rules_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(8)
+
+        hdr = QLabel("ПОЛЬЗОВАТЕЛЬСКИЕ YARA ПРАВИЛА ДЛЯ ПАМЯТИ")
+        hdr.setStyleSheet("color:#6e7681;font-size:11px;font-weight:bold;letter-spacing:0.5px;")
+        lay.addWidget(hdr)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # ── Left: list of added custom rules ─────────────────────────────
+        left_w = QWidget(); ll = QVBoxLayout(left_w)
+        ll.setContentsMargins(0, 0, 6, 0); ll.setSpacing(4)
+        lbl_l = QLabel("Добавленные правила")
+        lbl_l.setStyleSheet("color:#8b949e;font-size:11px;")
+        ll.addWidget(lbl_l)
+        self._mem_custom_list = QListWidget()
+        self._mem_custom_list.setStyleSheet(
+            "QListWidget{background:#0a0e14;border:1px solid #21262d;border-radius:4px;}")
+        self._mem_custom_list.currentRowChanged.connect(
+            lambda _: self._load_custom_rule(
+                self._mem_custom_list, self._mem_rule_edit, self._mem_custom_rules))
+        ll.addWidget(self._mem_custom_list, 1)
+        btn_del_m = QPushButton("🗑  Удалить правило")
+        btn_del_m.setObjectName("dangerBtn"); btn_del_m.setFixedHeight(30)
+        btn_del_m.clicked.connect(lambda: self._delete_custom_rule(
+            self._mem_custom_list, self._mem_rule_list,
+            self._mem_custom_rules, self._mem_rule_edit))
+        ll.addWidget(btn_del_m)
+        splitter.addWidget(left_w)
+
+        # ── Right: code editor ───────────────────────────────────────────
+        right_w = QWidget(); rl = QVBoxLayout(right_w)
+        rl.setContentsMargins(6, 0, 0, 0); rl.setSpacing(4)
+        lbl_r = QLabel("Редактор YARA правила")
+        lbl_r.setStyleSheet("color:#8b949e;font-size:11px;")
+        rl.addWidget(lbl_r)
+        self._mem_rule_edit = QTextEdit()
+        self._mem_rule_edit.setStyleSheet(
+            "background:#0a0e14;border:1px solid #21262d;border-radius:4px;"
+            "font-family:Consolas,monospace;font-size:12px;color:#c9d1d9;padding:8px;")
+        self._mem_rule_edit.setPlaceholderText(
+            "rule MyRule {\n"
+            "    meta:\n"
+            "        description = \"My custom rule\"\n"
+            "    strings:\n"
+            "        $s1 = \"pattern\" ascii nocase\n"
+            "    condition:\n"
+            "        any of them\n"
+            "}")
+        rl.addWidget(self._mem_rule_edit, 1)
+
+        btn_add_m = QPushButton("➕  Добавить / Обновить правило")
+        btn_add_m.setObjectName("secondaryBtn"); btn_add_m.setFixedHeight(34)
+        btn_add_m.clicked.connect(lambda: self._add_custom_rule(
+            self._mem_rule_edit, self._mem_rule_list,
+            self._mem_custom_rules, self._mem_custom_list))
+        rl.addWidget(btn_add_m)
+        splitter.addWidget(right_w)
+
+        splitter.setSizes([200, 520])
+        lay.addWidget(splitter, 1)
         return w
 
     # ── Tab 3: Результаты ─────────────────────────────────────────────────────
@@ -575,22 +714,77 @@ class HostsTab(QWidget):
                     selected[name] = custom_rules[name]
         return selected
 
-    def _add_custom_rule(self, text_edit: QTextEdit,
-                         rule_list: QListWidget, custom_store: dict) -> None:
+    def _add_custom_rule(self, text_edit: QTextEdit, rule_list: QListWidget,
+                         custom_store: dict,
+                         custom_list: "QListWidget | None" = None) -> None:
         text = text_edit.toPlainText().strip()
         if not text:
             return
         m    = re.search(r'rule\s+(\w+)', text)
         name = m.group(1) if m else f"Custom_{len(custom_store) + 1}"
         custom_store[name] = text
+        # Update existing item in rule_list (for re-add / update)
         for i in range(rule_list.count()):
             if rule_list.item(i).text() == name:
-                text_edit.clear(); return
+                if custom_list:
+                    self._refresh_custom_list(custom_list, custom_store)
+                text_edit.clear()
+                return
         item = QListWidgetItem(name)
         item.setCheckState(Qt.CheckState.Checked)
         item.setForeground(QColor("#58a6ff"))
         rule_list.addItem(item)
+        if custom_list:
+            self._refresh_custom_list(custom_list, custom_store)
         text_edit.clear()
+
+    def _refresh_custom_list(self, custom_list: QListWidget,
+                              custom_store: dict) -> None:
+        custom_list.blockSignals(True)
+        custom_list.clear()
+        for name in custom_store:
+            item = QListWidgetItem(name)
+            item.setForeground(QColor("#58a6ff"))
+            custom_list.addItem(item)
+        custom_list.blockSignals(False)
+
+    def _load_custom_rule(self, custom_list: QListWidget,
+                          editor: QTextEdit, custom_store: dict) -> None:
+        item = custom_list.currentItem()
+        if not item:
+            return
+        text = custom_store.get(item.text(), "")
+        if text:
+            editor.blockSignals(True)
+            editor.setPlainText(text)
+            editor.blockSignals(False)
+
+    def _delete_custom_rule(self, custom_list: QListWidget,
+                            rule_list: QListWidget,
+                            custom_store: dict, editor: QTextEdit) -> None:
+        item = custom_list.currentItem()
+        if not item:
+            return
+        name = item.text()
+        custom_store.pop(name, None)
+        for i in range(rule_list.count()):
+            if rule_list.item(i).text() == name:
+                rule_list.takeItem(i)
+                break
+        custom_list.takeItem(custom_list.currentRow())
+        editor.clear()
+
+    def _filter_file_rules(self, text: str) -> None:
+        lo = text.lower()
+        for i in range(self._file_rule_list.count()):
+            item = self._file_rule_list.item(i)
+            item.setHidden(bool(lo) and lo not in item.text().lower())
+
+    def _filter_mem_rules(self, text: str) -> None:
+        lo = text.lower()
+        for i in range(self._mem_rule_list.count()):
+            item = self._mem_rule_list.item(i)
+            item.setHidden(bool(lo) and lo not in item.text().lower())
 
     def _browse_path(self):
         d = QFileDialog.getExistingDirectory(self, "Выберите директорию")
@@ -598,7 +792,7 @@ class HostsTab(QWidget):
             self._path_inp.setText(d)
 
     def retranslate(self, _lang: str = ""):
-        self._btn_add.setText("+ " + t("hosts_add_btn"))
+        self._btn_add.setText(t("hosts_add_btn"))
         self._btn_remove.setText(t("hosts_remove_btn"))
         self._chk_hashes.setText(t("hosts_hashes_chk"))
         self._lbl_path.setText("Путь (remote):")

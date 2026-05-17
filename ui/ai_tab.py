@@ -66,6 +66,7 @@ class AITab(QWidget):
         hint.setStyleSheet("color:#6e7681;font-size:11px;")
         hint.setWordWrap(True)
         self.groq_hint = hint
+        hint.setVisible(saved_provider == "groq")
         cfg_lay.addWidget(hint)
         lay.addWidget(cfg_grp)
 

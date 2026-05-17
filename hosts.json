@@ -1,0 +1,29 @@
+[
+  {
+    "id": "d93bb8c3-4416-4d22-8ed2-8a9481309120",
+    "name": "pc2",
+    "ip": "192.168.1.68",
+    "port": 5555,
+    "token": "4dffe1880a2d91a2deecaf23fb3431413c55afc07a4d725479644d70bc932e7f",
+    "last_seen": "19:57:34",
+    "last_scan": "18:56:51"
+  },
+  {
+    "id": "161d2f61-4cb7-4f77-9d10-ec7c5242690c",
+    "name": "mypc",
+    "ip": "192.168.1.68",
+    "port": 5555,
+    "token": "8e216a2f94b59badcfbb357807b525a2812b7d0c17b1ea4111a6c4c18b1df74e",
+    "last_seen": null,
+    "last_scan": null
+  },
+  {
+    "id": "20545478-6ea3-482e-b9cc-6b62688f2871",
+    "name": "123",
+    "ip": "192.168.1.67",
+    "port": 5555,
+    "token": "8e216a2f94b59badcfbb357807b525a2812b7d0c17b1ea4111a6c4c18b1df74e",
+    "last_seen": "16:04:12",
+    "last_scan": "15:57:17"
+  }
+]

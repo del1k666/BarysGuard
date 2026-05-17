@@ -1,30 +1,21 @@
 ============================================================
-  IOC ANALYZER v2.0 — Setup & Build Guide
+  BARYSGUARD — Threat Intelligence & Incident Response
   Diploma Project — AITU Cybersecurity School 2025
 ============================================================
-
-НОВОЕ В v2.0:
-─────────────────────────────────────────────
-  ✔ ИСПРАВЛЕН БАГ: результаты сохраняются в
-    правильную папку (не в папку скана)
-  ✔ YARA Scanner — 20 встроенных правил
-  ✔ AI Assistant — помощник на Claude API
-  ✔ Report Builder — экспорт HTML/TXT
-  ✔ Редактор YARA правил с AI-генерацией
 
 ТРЕБОВАНИЯ:
 ─────────────────────────────────────────────
   - Windows 10/11
-  - Python 3.10+
-  - Интернет (для VT API и AI Assistant)
+  - Python 3.11+
+  - Интернет (для VT API)
 
 УСТАНОВКА И СБОРКА:
 ─────────────────────────────────────────────
-1. Установи Python 3.10+ (галочка "Add to PATH")
+1. Установи Python 3.11+ (галочка "Add to PATH")
 
 2. Запусти build.bat от администратора
 
-3. Готово: dist\IOC_Analyzer_v2.exe
+3. Готово: dist\BarysGuard.exe
 
 БЕЗ СБОРКИ (разработка):
 ─────────────────────────────────────────────
@@ -33,36 +24,25 @@
 
 YARA ДВИЖОК:
 ─────────────────────────────────────────────
-  Приоритет 1: yara64.exe в C:\Tools\yara\
+  Приоритет 1: yara64.exe в папке проекта
     Скачать: https://github.com/VirusTotal/yara/releases
 
   Приоритет 2: pip install yara-python
-    (устанавливается автоматически через build.bat)
 
-AI ASSISTANT:
+ВСТРОЕННЫЕ YARA ПРАВИЛА (40+):
 ─────────────────────────────────────────────
-  Нужен ключ Claude API (sk-ant-...)
-  Получить бесплатно: https://console.anthropic.com
-  Вводится прямо в интерфейсе вкладки AI Assistant
+  CRITICAL: LockBit, BlackCat/ALPHV, Mimikatz,
+            CobaltStrike, Meterpreter, WannaCry
 
-ВСТРОЕННЫЕ YARA ПРАВИЛА (20 штук):
+  HIGH:     AsyncRAT, QuasarRAT, Remcos,
+            RedLine Stealer, Vidar, AgentTesla,
+            Sliver C2, Havoc C2, Chisel
+
+  MEDIUM:   LOLBins, AMSI Bypass, DefenderTampering,
+            WebShell_PHP, WebShell_ASPX, Packed_UPX
+
+УДАЛЁННЫЙ АГЕНТ:
 ─────────────────────────────────────────────
-  CRITICAL: Mimikatz, Meterpreter, CobaltStrike,
-            WannaCry, Emotet, Ransomware_Generic
-
-  HIGH:     AgentTesla, Njrat, Keylogger_Generic,
-            ProcessInjection, WebShell_PHP,
-            Credential_Harvesting, UAC_Bypass,
-            Lateral_Movement
-
-  MEDIUM:   DLL_Sideloading, Suspicious_Office_Macro,
-            Network_Recon, Persistence_Registry,
-            Anti_Analysis
-
-ИСПРАВЛЕННЫЙ БАГ:
-─────────────────────────────────────────────
-  v1: PowerShell скрипт жёстко хардкодил папку,
-      игнорируя выбор пользователя в UI.
-  v2: папка передаётся как параметр -ResultDir
-      в скрипт, результаты всегда идут туда,
-      куда указал пользователь.
+  agent\dist\agent.exe — скопировать на целевой хост
+  Запустить от администратора для генерации токена.
+  Установить как службу: agent.exe --install

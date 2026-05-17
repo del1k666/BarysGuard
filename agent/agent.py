@@ -1,5 +1,5 @@
 """
-IOC Analyzer Agent — remote scanning daemon.
+BarysGuard Agent — remote scanning daemon.
 
   python agent.py                  run in foreground (test mode)
   python agent.py --install        install as Windows Service
@@ -16,6 +16,7 @@ import tempfile
 import subprocess
 import platform
 import hashlib
+import ctypes
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
@@ -378,20 +379,39 @@ def scan_hashes():
 
 
 # ── Network Isolation ──────────────────────────────────────────────────────
-_ISOLATE_PREFIX = "IOCIsolate"
+# Only the Allow rules — blocking is done via profile default action, not explicit rules.
+# Block rules in Windows Firewall override Allow rules at the same priority,
+# so using Set-NetFirewallProfile ensures mgmt IP can always reach the agent.
+_ISOLATE_NAMES = [
+    "IOCIsolate_AllowMgmt_In",
+    "IOCIsolate_AllowMgmt_Out",
+]
+
+def _ps(script: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-NonInteractive",
+         "-Command", script],
+        capture_output=True, text=True, timeout=timeout,
+        encoding="utf-8", errors="replace",
+    )
+
+def _is_admin() -> bool:
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
 
 
 @app.route("/network/status", methods=["GET"])
 @_auth
 def network_status():
     try:
-        r = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule",
-             f"name={_ISOLATE_PREFIX}_BlockOut"],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
+        r = _ps(
+            "if (Get-NetFirewallRule -DisplayName 'IOCIsolate_AllowMgmt_In' "
+            "-ErrorAction SilentlyContinue) { 'isolated' } else { 'normal' }",
+            timeout=10,
         )
-        isolated = r.returncode == 0 and _ISOLATE_PREFIX in r.stdout
+        isolated = "isolated" in r.stdout.lower()
         return jsonify({"isolated": isolated})
     except Exception as e:
         return jsonify({"isolated": False, "error": str(e)})
@@ -400,49 +420,68 @@ def network_status():
 @app.route("/network/isolate", methods=["POST"])
 @_auth
 def network_isolate():
+    if not _is_admin():
+        return jsonify({
+            "status": "error",
+            "errors": ["Agent is not running as Administrator. "
+                       "Restart the agent with elevated privileges to modify firewall rules."]
+        }), 500
+
     data    = request.get_json(silent=True) or {}
     mgmt_ip = data.get("mgmt_ip", "").strip()
-    errs    = []
+    if not mgmt_ip:
+        return jsonify({
+            "status": "error",
+            "errors": ["mgmt_ip is required — without it there is no way to restore isolation remotely."]
+        }), 400
 
-    def _fw(cmd):
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=15, encoding="utf-8", errors="replace")
+    try:
+        # Remove stale rules first
+        names_ps = ",".join(f"'{n}'" for n in _ISOLATE_NAMES)
+        _ps(f"@({names_ps}) | ForEach-Object {{ "
+            f"Remove-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue }}")
+
+        # Strategy: allow mgmt IP first, THEN set profile default to Block.
+        # This avoids the Windows Firewall priority issue where explicit Block rules
+        # always override Allow rules — profile-default Block does NOT override Allow rules.
+        script = (
+            "$ErrorActionPreference = 'Stop'\n"
+            "try {\n"
+            f"    New-NetFirewallRule -DisplayName 'IOCIsolate_AllowMgmt_In' "
+            f"-Direction Inbound -Action Allow -RemoteAddress '{mgmt_ip}' "
+            f"-Enabled True -Profile Any | Out-Null\n"
+            f"    New-NetFirewallRule -DisplayName 'IOCIsolate_AllowMgmt_Out' "
+            f"-Direction Outbound -Action Allow -RemoteAddress '{mgmt_ip}' "
+            f"-Enabled True -Profile Any | Out-Null\n"
+            "    Set-NetFirewallProfile -Profile Domain,Private,Public "
+            "-DefaultInboundAction Block -DefaultOutboundAction Block\n"
+            "} catch {\n"
+            "    Write-Host \"ERROR: $($_.Exception.Message)\"\n"
+            "    exit 1\n"
+            "}"
+        )
+        r = _ps(script)
         if r.returncode != 0:
-            errs.append((r.stderr or r.stdout).strip()[:200])
-
-    # Add allow rules for management IP first (more specific → wins over block)
-    if mgmt_ip:
-        _fw(["netsh", "advfirewall", "firewall", "add", "rule",
-             f"name={_ISOLATE_PREFIX}_AllowMgmt_In",
-             "dir=in", "action=allow", f"remoteip={mgmt_ip}",
-             "profile=any", "enable=yes"])
-        _fw(["netsh", "advfirewall", "firewall", "add", "rule",
-             f"name={_ISOLATE_PREFIX}_AllowMgmt_Out",
-             "dir=out", "action=allow", f"remoteip={mgmt_ip}",
-             "profile=any", "enable=yes"])
-
-    # Block all remaining traffic
-    _fw(["netsh", "advfirewall", "firewall", "add", "rule",
-         f"name={_ISOLATE_PREFIX}_BlockIn",
-         "dir=in", "action=block", "profile=any", "enable=yes"])
-    _fw(["netsh", "advfirewall", "firewall", "add", "rule",
-         f"name={_ISOLATE_PREFIX}_BlockOut",
-         "dir=out", "action=block", "profile=any", "enable=yes"])
-
-    if errs:
-        return jsonify({"status": "error", "errors": errs}), 500
-    return jsonify({"status": "isolated", "mgmt_ip": mgmt_ip})
+            err = (r.stdout or r.stderr).strip()[:400]
+            return jsonify({"status": "error", "errors": [err or "PowerShell firewall script failed"]}), 500
+        return jsonify({"status": "isolated", "mgmt_ip": mgmt_ip})
+    except Exception as e:
+        return jsonify({"status": "error", "errors": [str(e)]}), 500
 
 
 @app.route("/network/restore", methods=["POST"])
 @_auth
 def network_restore():
-    for suffix in ("AllowMgmt_In", "AllowMgmt_Out", "BlockIn", "BlockOut"):
-        subprocess.run(
-            ["netsh", "advfirewall", "firewall", "delete", "rule",
-             f"name={_ISOLATE_PREFIX}_{suffix}"],
-            capture_output=True, timeout=10,
-        )
+    try:
+        # Remove allow rules
+        names_ps = ",".join(f"'{n}'" for n in _ISOLATE_NAMES)
+        _ps(f"@({names_ps}) | ForEach-Object {{ "
+            f"Remove-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue }}")
+        # Restore profile defaults (NotConfigured = OS default: inbound block, outbound allow)
+        _ps("Set-NetFirewallProfile -Profile Domain,Private,Public "
+            "-DefaultInboundAction NotConfigured -DefaultOutboundAction NotConfigured")
+    except Exception:
+        pass
     return jsonify({"status": "restored"})
 
 
@@ -483,8 +522,8 @@ def _run_as_service():
 
     class IOCAgentService(win32serviceutil.ServiceFramework):
         _svc_name_         = "IOCAgent"
-        _svc_display_name_ = "IOC Analyzer Agent"
-        _svc_description_  = "Remote scanning agent for IOC Analyzer"
+        _svc_display_name_ = "BarysGuard Agent"
+        _svc_description_  = "Remote scanning agent for BarysGuard"
 
         def __init__(self, args):
             win32serviceutil.ServiceFramework.__init__(self, args)

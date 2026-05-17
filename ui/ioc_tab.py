@@ -26,7 +26,7 @@ class IOCTab(QWidget):
         gl.addWidget(btn); lay.addWidget(grp)
 
         row = QHBoxLayout()
-        self.btn_run = QPushButton("  Запустить сбор IoC"); self.btn_run.setFixedHeight(38)
+        self.btn_run = QPushButton("Запустить сбор IoC"); self.btn_run.setFixedHeight(38)
         self.btn_run.clicked.connect(self._run); row.addWidget(self.btn_run)
         self.btn_clr = QPushButton("Очистить"); self.btn_clr.setObjectName("secondaryBtn")
         self.btn_clr.setFixedWidth(100); self.btn_clr.clicked.connect(lambda: self.log.clear())

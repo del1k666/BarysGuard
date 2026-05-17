@@ -1,10 +1,13 @@
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox
+from pathlib import Path
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox, QApplication
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
+
+_ICON_PATH = str(Path(__file__).parent.parent / "docs" / "img" / "image.png")
 from ui.dashboard_tab import DashboardTab
 from ui.hash_tab import HashTab
 from ui.ioc_tab import IOCTab
 from ui.yara_tab import YARATab
-from ui.ai_tab import AITab
 from ui.report_tab import ReportTab
 from ui.net_intel_tab import NetIntelTab
 from ui.quarantine_tab import QuarantineTab
@@ -18,7 +21,7 @@ from core.lang_signal import lang_signal
 
 _TAB_KEYS = [
     "tab_dashboard", "tab_hash", "tab_ioc", "tab_yara", "tab_net",
-    "tab_ai", "tab_report", "tab_memory", "tab_quarantine", "tab_settings", "tab_hosts",
+    "tab_report", "tab_memory", "tab_quarantine", "tab_settings", "tab_hosts",
 ]
 
 
@@ -26,6 +29,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(t("app_title"))
+        self.setWindowIcon(QIcon(_ICON_PATH))
         self.setMinimumSize(1000, 700)
         self.resize(1150, 780)
 
@@ -40,14 +44,19 @@ class MainWindow(QMainWindow):
         hdr.setStyleSheet("background:#161b22;border-bottom:1px solid #30363d;")
         hdr.setFixedHeight(64)
         hl = QHBoxLayout(hdr)
-        hl.setContentsMargins(20, 0, 20, 0)
-        logo = QLabel("IOC ANALYZER")
+        hl.setContentsMargins(16, 0, 20, 0)
+        hl.setSpacing(0)
+
+        logo = QLabel("BARYSGUARD")
         logo.setStyleSheet("font-size:20px;font-weight:bold;color:#58a6ff;letter-spacing:2px;")
         hl.addWidget(logo)
+        hl.addStretch()
+
         self._subtitle = QLabel(t("app_subtitle"))
         self._subtitle.setStyleSheet("font-size:10px;color:#8b949e;letter-spacing:1px;")
         self._subtitle.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hl.addWidget(self._subtitle)
+        hl.addSpacing(16)
         self._host_combo = QComboBox()
         self._host_combo.setFixedWidth(200)
         self._host_combo.setStyleSheet(
@@ -75,7 +84,6 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(IOCTab(),              t("tab_ioc"))
         self._tabs.addTab(self._yara_tab,        t("tab_yara"))
         self._tabs.addTab(NetIntelTab(),         t("tab_net"))
-        self._tabs.addTab(AITab(),               t("tab_ai"))
         self._tabs.addTab(ReportTab(),           t("tab_report"))
         self.mem_tab = MemoryScannerTab()
         self._tabs.addTab(self.mem_tab,          t("tab_memory"))
@@ -91,9 +99,9 @@ class MainWindow(QMainWindow):
         ftr.setFixedHeight(26)
         fl = QHBoxLayout(ftr)
         fl.setContentsMargins(14, 0, 14, 0)
-        fl.addWidget(QLabel("VirusTotal API  ·  YARA Engine  ·  AbuseIPDB  ·  AI Assistant"))
+        fl.addWidget(QLabel("VirusTotal API  ·  YARA Engine  ·  AbuseIPDB"))
         fl.addStretch()
-        fl.addWidget(QLabel("© 2025 IOC Analyzer"))
+        fl.addWidget(QLabel("© 2026 BarysGuard"))
         for w in ftr.findChildren(QLabel):
             w.setStyleSheet("color:#484f58;font-size:10px;")
         ml.addWidget(ftr)

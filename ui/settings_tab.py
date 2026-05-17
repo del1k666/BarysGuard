@@ -51,10 +51,6 @@ class SettingsTab(QWidget):
             "virustotal.com/gui/my-apikey  (4 req/min free)")
         self.abuse_inp = self._key_field(ga, "AbuseIPDB API Key",   "abuseipdb_key",
             "abuseipdb.com/api  (1000 req/day free)")
-        self.groq_inp  = self._key_field(ga, "Groq API Key",        "groq_key",
-            "console.groq.com  (free, no card)")
-        self.claude_inp = self._key_field(ga, "Claude API Key",     "claude_key",
-            "console.anthropic.com")
         lay.addWidget(self.grp_api)
 
         # Folders
@@ -197,8 +193,6 @@ class SettingsTab(QWidget):
     def _load(self):
         self.vt_inp.setText(Config.get("vt_api_key", ""))
         self.abuse_inp.setText(Config.get("abuseipdb_key", ""))
-        self.groq_inp.setText(Config.get("groq_key", ""))
-        self.claude_inp.setText(Config.get("claude_key", ""))
         self.results_inp.setText(Config.get("results_dir", ""))
         self.quar_inp.setText(Config.get("quarantine_dir", ""))
         self.rate_inp.setText(str(Config.get("vt_rate_limit_sec", 15)))
@@ -208,8 +202,6 @@ class SettingsTab(QWidget):
         try:
             Config.set("vt_api_key",       self.vt_inp.text().strip())
             Config.set("abuseipdb_key",    self.abuse_inp.text().strip())
-            Config.set("groq_key",         self.groq_inp.text().strip())
-            Config.set("claude_key",       self.claude_inp.text().strip())
             Config.set("results_dir",      self.results_inp.text().strip())
             Config.set("quarantine_dir",   self.quar_inp.text().strip())
             try:
