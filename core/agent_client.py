@@ -63,3 +63,6 @@ class AgentClient:
 
     def network_restore(self) -> dict:
         return self._post("/network/restore", {})
+
+    def hunt(self, payload: dict) -> dict:
+        return self._post("/hunt", payload)

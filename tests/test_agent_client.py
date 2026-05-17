@@ -47,6 +47,24 @@ def test_unauthorized_raises(client):
             client.ping()
 
 
+def test_hunt_posts_correct_body(client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "mutex_found": True,
+        "mutex_name": "Global\\TestMutex",
+        "hash_matches": [],
+        "process_matches": [],
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.post", return_value=mock_resp) as m:
+        result = client.hunt({"mutex": "Global\\TestMutex"})
+        _, kwargs = m.call_args
+        assert kwargs["json"]["mutex"] == "Global\\TestMutex"
+    assert result["mutex_found"] is True
+    assert result["mutex_name"] == "Global\\TestMutex"
+
+
 def test_scan_memory_all_returns_matches(client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
