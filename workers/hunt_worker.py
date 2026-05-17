@@ -33,6 +33,9 @@ class HuntWorker(QThread):
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
             futures = {ex.submit(self._hunt_one, h): h for h in hosts}
             for fut in concurrent.futures.as_completed(futures):
-                label, result = fut.result()
-                self.result.emit(label, result)
+                try:
+                    label, result = fut.result()
+                    self.result.emit(label, result)
+                except Exception:
+                    pass
         self.done.emit()

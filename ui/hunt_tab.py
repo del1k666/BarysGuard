@@ -75,7 +75,7 @@ class HuntTab(QWidget):
         self._tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._tbl.horizontalHeader().resizeSection(1, 90)
         self._tbl.horizontalHeader().resizeSection(2, 280)
-        self._tbl.horizontalHeader().resizeSection(3, 70)
+        self._tbl.horizontalHeader().resizeSection(3, 82)
         self._tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         lay.addWidget(self._tbl)
@@ -120,7 +120,7 @@ class HuntTab(QWidget):
 
     def _on_result(self, host: str, data: dict):
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        if not data.get("_online", True):
+        if not data.get("_online", False):
             self._add_row(host, "STATUS", "OFFLINE", now, "#484f58")
             return
 

@@ -244,6 +244,7 @@ class DashboardTab(QWidget):
         t = QLabel(title)
         t.setStyleSheet(
             "color:#6e7681;font-size:10px;font-weight:bold;letter-spacing:1px;")
+        t.setWordWrap(True)
         v = QLabel(value)
         v.setStyleSheet(f"font-size:28px;font-weight:bold;color:{color};")
         fl.addWidget(t); fl.addWidget(v)

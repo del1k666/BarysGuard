@@ -162,6 +162,7 @@ class HostsTab(QWidget):
 
         self._sub_tabs = QTabWidget()
         self._sub_tabs.setEnabled(False)
+        self._sub_tabs.setUsesScrollButtons(True)
         self._sub_tabs.setStyleSheet(
             "QTabBar::tab{padding:8px 16px;font-size:12px;}"
             "QTabBar::tab:selected{font-weight:bold;}")
@@ -191,6 +192,7 @@ class HostsTab(QWidget):
 
         self._st_name   = QLabel("—")
         self._st_name.setStyleSheet("font-size:18px;font-weight:bold;color:#58a6ff;")
+        self._st_name.setWordWrap(True)
         self._st_addr   = self._detail_row(cl, "Адрес")
         self._st_seen   = self._detail_row(cl, "Последний пинг")
         self._st_scan   = self._detail_row(cl, "Последний скан")
@@ -230,10 +232,13 @@ class HostsTab(QWidget):
 
     def _detail_row(self, parent_layout, label: str) -> QLabel:
         row = QHBoxLayout()
-        lbl = QLabel(label + ":"); lbl.setFixedWidth(130)
+        lbl = QLabel(label + ":")
+        lbl.setMinimumWidth(130)
         lbl.setStyleSheet("color:#6e7681;font-size:12px;")
-        val = QLabel("—"); val.setStyleSheet("color:#e6edf3;font-size:12px;")
-        row.addWidget(lbl); row.addWidget(val); row.addStretch()
+        val = QLabel("—")
+        val.setStyleSheet("color:#e6edf3;font-size:12px;")
+        val.setWordWrap(True)
+        row.addWidget(lbl); row.addWidget(val, 1)
         parent_layout.addLayout(row)
         return val
 

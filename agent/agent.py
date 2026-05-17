@@ -8,6 +8,7 @@ BarysGuard Agent — remote scanning daemon.
 """
 import sys
 import os
+import re
 import ssl
 import json
 import secrets
@@ -394,6 +395,8 @@ def hunt():
         file_count  = 0
         try:
             for root, _dirs, files in os.walk(hash_path):
+                if file_count >= 10000:
+                    break
                 for fname in files:
                     if file_count >= 10000:
                         break
@@ -491,6 +494,8 @@ def network_isolate():
             "status": "error",
             "errors": ["mgmt_ip is required — without it there is no way to restore isolation remotely."]
         }), 400
+    if not re.match(r'^[\d.:/a-fA-F]+$', mgmt_ip):
+        return jsonify({"status": "error", "errors": ["invalid mgmt_ip format"]}), 400
 
     try:
         # Remove stale rules first
