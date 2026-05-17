@@ -977,6 +977,9 @@ class HostsTab(QWidget):
         if rules:
             self._log(f"  Правила: {', '.join(list(rules.keys())[:8])}"
                       f"{'...' if len(rules) > 8 else ''}", "#6e7681")
+        DashboardTab.log_event("SCAN",
+            f"Файловый скан запущен — {host_label} | {path}",
+            level="info", scan=True, host=host_label)
 
         self._btn_scan.setEnabled(False)
         self._file_prog.setVisible(True)
@@ -988,7 +991,8 @@ class HostsTab(QWidget):
         self._scan_worker = RemoteScanWorker(host, scan_types, path, rules)
         self._scan_worker.progress.connect(self._on_file_progress)
         self._scan_worker.done.connect(lambda r: self._on_results_done(r, host))
-        self._scan_worker.error.connect(self._on_file_error)
+        self._scan_worker.error.connect(
+            lambda m, hl=host_label: self._on_file_error(m, hl))
         self._scan_worker.finished.connect(self._on_file_finished)
         self._scan_worker.start()
 
@@ -996,10 +1000,14 @@ class HostsTab(QWidget):
         self._file_status.setText(msg)
         self._log(f"  {msg}", "#6e7681")
 
-    def _on_file_error(self, msg: str):
+    def _on_file_error(self, msg: str, host_label: str = ""):
         self._file_status.setText(f"✘ {msg[:120]}")
         self._log(f"✘ Ошибка: {msg}", "#f85149")
         self._sub_tabs.setCurrentIndex(self._TAB_RESULTS)
+        if host_label:
+            DashboardTab.log_event("SCAN",
+                f"✘ Ошибка сканирования — {host_label}: {msg[:80]}",
+                level="high", scan=True, host=host_label)
 
     def _on_file_finished(self):
         self._btn_scan.setEnabled(True)
@@ -1057,7 +1065,11 @@ class HostsTab(QWidget):
 
         host_label = f"{host['name']} ({host['ip']})"
         self._mem_stop_requested = False
+        self._mem_scan_host_label = host_label
         self._log(f"▶ Memory Scan на <b>{host_label}</b>  | правил: {len(rules)}", "#a371f7")
+        DashboardTab.log_event("MEMORY",
+            f"Memory Scan запущен — {host_label} | {len(rules)} правил",
+            level="info", scan=True, host=host_label)
 
         self._btn_mem_scan.setEnabled(False); self._btn_mem_stop.setEnabled(True)
         self._mem_prog.setVisible(True)
@@ -1070,9 +1082,12 @@ class HostsTab(QWidget):
             self._mem_status.setText(m), self._log(f"  {m}", "#6e7681")))
         self._mem_worker.done.connect(
             lambda r: None if self._mem_stop_requested else self._on_results_done(r, host))
-        self._mem_worker.error.connect(lambda m: (
+        self._mem_worker.error.connect(lambda m, hl=host_label: (
             self._mem_status.setText(f"✘ {m}"),
-            self._log(f"✘ Memory Scan ошибка: {m}", "#f85149")))
+            self._log(f"✘ Memory Scan ошибка: {m}", "#f85149"),
+            DashboardTab.log_event("MEMORY",
+                f"✘ Ошибка Memory Scan — {hl}: {m[:80]}",
+                level="high", scan=True, host=hl)))
         self._mem_worker.finished.connect(self._on_mem_finished)
         self._mem_worker.start()
 
@@ -1088,6 +1103,10 @@ class HostsTab(QWidget):
         self._btn_mem_stop.setEnabled(False)
         self._mem_status.setText("Остановлено")
         self._log("⏹ Memory Scan остановлен", "#d29922")
+        hl = getattr(self, "_mem_scan_host_label", "")
+        if hl:
+            DashboardTab.log_event("MEMORY", f"⏹ Memory Scan остановлен — {hl}",
+                level="info", scan=True, host=hl)
 
     # ── Shared results handler ────────────────────────────────────────────────
 
@@ -1139,6 +1158,20 @@ class HostsTab(QWidget):
                 if r.get("type") == "IOC" and r.get("rule") == "Подозрит. процесс")
             DashboardTab.stats["yara_hits"]        += yara_hits
             DashboardTab.stats["suspicious_procs"] += sus_procs
+
+            # Always log a summary — this ensures Remote tab always shows scan activity
+            types_found = {r.get("type","") for r in results
+                           if r.get("type","") not in
+                           ("ERROR","WARN","TIMEOUT","COMPILE_ERR","INFO","DEBUG")}
+            ev_type = ("MEMORY" if "MEMORY" in types_found
+                       else "YARA" if types_found else "SCAN")
+            DashboardTab.log_event(
+                ev_type,
+                f"{'⚠ ' + str(real_hits) + ' совп.' if real_hits else '✓ Угрозы не найдены'}"
+                f" — {host_label} ({len(results)} записей)",
+                level="high" if real_hits else "ok",
+                scan=True, host=host_label,
+            )
 
             if real_hits:
                 msg_color = "#d29922"
