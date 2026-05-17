@@ -357,6 +357,66 @@ def scan_memory_all():
     return jsonify({"matches": matches})
 
 
+@app.route("/hunt", methods=["POST"])
+@_auth
+def hunt():
+    import ctypes
+    data         = request.json or {}
+    mutex_name   = data.get("mutex", "")
+    hashes       = data.get("hashes", [])
+    hash_path    = data.get("hash_path", "C:\\")
+    process_name = data.get("process_name", "")
+
+    result = {}
+
+    if mutex_name:
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenMutexW(SYNCHRONIZE, False, mutex_name)
+        found = bool(handle)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+        result["mutex_found"] = found
+        result["mutex_name"]  = mutex_name
+
+    if process_name:
+        matches = []
+        for p in psutil.process_iter(["pid", "name"]):
+            try:
+                if p.info["name"].lower() == process_name.lower():
+                    matches.append({"name": p.info["name"], "pid": p.info["pid"]})
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        result["process_matches"] = matches
+
+    if hashes:
+        norm = {h.lower() for h in hashes if len(h) in (32, 64)}
+        found_files = []
+        file_count  = 0
+        try:
+            for root, _dirs, files in os.walk(hash_path):
+                for fname in files:
+                    if file_count >= 10000:
+                        break
+                    fpath = os.path.join(root, fname)
+                    try:
+                        if os.path.getsize(fpath) > 500 * 1024 * 1024:
+                            continue
+                        with open(fpath, "rb") as f:
+                            content = f.read()
+                        sha256 = hashlib.sha256(content).hexdigest()
+                        md5    = hashlib.md5(content).hexdigest()
+                        if sha256 in norm or md5 in norm:
+                            found_files.append({"file": fpath, "hash": sha256})
+                        file_count += 1
+                    except (PermissionError, OSError):
+                        pass
+        except Exception:
+            pass
+        result["hash_matches"] = found_files
+
+    return jsonify(result)
+
+
 @app.route("/scan/hashes", methods=["POST"])
 @_auth
 def scan_hashes():
