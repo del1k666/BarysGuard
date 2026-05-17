@@ -52,6 +52,10 @@ class ReportTab(QWidget):
         btn_html = QPushButton("Экспорт HTML"); btn_html.setFixedHeight(36)
         btn_html.clicked.connect(self._export_html); btn_row.addWidget(btn_html)
 
+        btn_xl = QPushButton("Экспорт Excel")
+        btn_xl.setObjectName("secondaryBtn"); btn_xl.setFixedHeight(36)
+        btn_xl.clicked.connect(self._export_excel); btn_row.addWidget(btn_xl)
+
         btn_txt = QPushButton("Экспорт TXT")
         btn_txt.setObjectName("secondaryBtn"); btn_txt.setFixedHeight(36)
         btn_txt.clicked.connect(self._export_txt); btn_row.addWidget(btn_txt)
@@ -347,6 +351,75 @@ tr:hover td{{background:#1c2128;}}
             self.preview.setText(f"Отчёт сохранён: {path}\n\nОткрываю в браузере...")
             try: os.startfile(path)
             except: pass
+
+    def _export_excel(self):
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            self.preview.setText("openpyxl не установлен. Запусти: pip install openpyxl")
+            return
+
+        d = self._collect_data()
+        s = d["stats"]
+        wb = openpyxl.Workbook()
+
+        hdr_font = Font(bold=True, color="FFFFFF")
+        hdr_fill = PatternFill("solid", fgColor="1F3864")
+
+        def _sheet(ws, headers, rows):
+            ws.append(headers)
+            for cell in ws[1]:
+                cell.font = hdr_font
+                cell.fill = hdr_fill
+            for row in rows:
+                ws.append(row)
+            for col in ws.columns:
+                width = max((len(str(c.value or "")) for c in col), default=8)
+                ws.column_dimensions[col[0].column_letter].width = min(width + 4, 60)
+
+        ws = wb.active
+        ws.title = "Статистика"
+        _sheet(ws, ["Метрика", "Значение"], [
+            ["Hash Lookups",     s["hash_lookups"]],
+            ["Malicious",        s["malicious"]],
+            ["Clean",            s["clean"]],
+            ["IOC Runs",         s["ioc_runs"]],
+            ["Suspicious Procs", s["suspicious_procs"]],
+            ["YARA Scans",       s["yara_scans"]],
+            ["YARA Hits",        s["yara_hits"]],
+            ["Net Checks",       s["net_checks"]],
+            ["High Risk IPs",    s["high_risk_ips"]],
+        ])
+
+        ws2 = wb.create_sheet("YARA")
+        _sheet(ws2, ["Время", "Severity", "Событие"],
+               [[e.get("time", ""), e.get("severity", ""), e.get("msg", "")]
+                for e in d["yara_events"]])
+
+        ws3 = wb.create_sheet("Hash Lookup")
+        _sheet(ws3, ["Время", "Результат"],
+               [[e.get("time", ""), e.get("msg", "")] for e in d["hash_events"]])
+
+        ws4 = wb.create_sheet("IOC")
+        _sheet(ws4, ["Время", "Тип", "Детали"],
+               [[e.get("time", ""), e.get("type", ""), e.get("msg", "")]
+                for e in d["ioc_events"]])
+
+        ws5 = wb.create_sheet("Network")
+        _sheet(ws5, ["Цель", "Результат"],
+               [[e.get("target", ""), e.get("msg", "")] for e in d["net_events"]])
+
+        ws6 = wb.create_sheet("Remote Scans")
+        _sheet(ws6, ["Время", "Хост", "Тип", "Правило/Файл"],
+               [[e.get("time", ""), e.get("host", ""), e.get("type", ""), e.get("msg", "")]
+                for e in d["remote_events"]])
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить Excel отчёт", "report.xlsx", "Excel (*.xlsx)")
+        if path:
+            wb.save(path)
+            self.preview.setText(f"Excel отчёт сохранён: {path}")
 
     def _export_txt(self):
         self._preview()
