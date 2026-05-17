@@ -14,6 +14,7 @@ from ui.quarantine_tab import QuarantineTab
 from ui.memory_scanner_tab import MemoryScannerTab
 from ui.settings_tab import SettingsTab
 from ui.hosts_tab import HostsTab
+from ui.hunt_tab import HuntTab
 import core.host_state as host_state
 from core.hosts_config import load_hosts
 from core.i18n import t
@@ -22,6 +23,7 @@ from core.lang_signal import lang_signal
 _TAB_KEYS = [
     "tab_dashboard", "tab_hash", "tab_ioc", "tab_yara", "tab_net",
     "tab_report", "tab_memory", "tab_quarantine", "tab_settings", "tab_hosts",
+    "tab_hunt",
 ]
 
 
@@ -91,6 +93,8 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.quarantine_tab,   t("tab_quarantine"))
         self._tabs.addTab(self._settings_tab,    t("tab_settings"))
         self._tabs.addTab(self._hosts_tab,       t("tab_hosts"))
+        self._hunt_tab = HuntTab()
+        self._tabs.addTab(self._hunt_tab,        t("tab_hunt"))
         ml.addWidget(self._tabs)
 
         # Footer
