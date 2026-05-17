@@ -1,9 +1,10 @@
 import datetime
+import time
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
-    QProgressBar, QFrame, QLabel, QTabWidget, QPushButton,
+    QProgressBar, QFrame, QLabel, QTabWidget, QPushButton, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -32,7 +33,7 @@ class DashboardTab(QWidget):
         lay.setSpacing(10)
         lay.setContentsMargins(16, 16, 16, 16)
 
-        # ── Stat cards row ────────────────────────────────────────────
+        # Stat cards row
         cards = QHBoxLayout()
         cards.setSpacing(8)
         self._c_hash     = self._stat_card("Hash Lookups",     "0", "#58a6ff")
@@ -46,7 +47,10 @@ class DashboardTab(QWidget):
             cards.addWidget(card[0])
         lay.addLayout(cards)
 
-        # ── Sub-tabs ──────────────────────────────────────────────────
+        # Filter bar
+        lay.addWidget(self._build_filter_bar())
+
+        # Sub-tabs
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(
             "QTabBar::tab{padding:8px 20px;font-size:12px;}"
@@ -58,6 +62,45 @@ class DashboardTab(QWidget):
         self._tabs.addTab(self._build_remote_tab(),    "🌐  Удалённые")
         lay.addWidget(self._tabs)
 
+    def _build_filter_bar(self) -> QWidget:
+        w = QWidget()
+        fl = QHBoxLayout(w)
+        fl.setContentsMargins(2, 2, 2, 2)
+        fl.setSpacing(8)
+
+        _lbl_style = "color:#8b949e;font-size:11px;"
+        _cb_style = (
+            "QComboBox{background:#161b22;color:#c9d1d9;border:1px solid #30363d;"
+            "border-radius:4px;padding:2px 8px;font-size:11px;}"
+            "QComboBox::drop-down{border:none;}"
+        )
+
+        lbl_t = QLabel("Период:")
+        lbl_t.setStyleSheet(_lbl_style)
+        fl.addWidget(lbl_t)
+
+        self._combo_time = QComboBox()
+        self._combo_time.addItems(["Все время", "Последний час", "Сегодня", "Последние 24ч"])
+        self._combo_time.setFixedWidth(150)
+        self._combo_time.setStyleSheet(_cb_style)
+        self._combo_time.currentIndexChanged.connect(self._refresh)
+        fl.addWidget(self._combo_time)
+
+        fl.addSpacing(16)
+        lbl_h = QLabel("Хост:")
+        lbl_h.setStyleSheet(_lbl_style)
+        fl.addWidget(lbl_h)
+
+        self._combo_host = QComboBox()
+        self._combo_host.setFixedWidth(230)
+        self._combo_host.setStyleSheet(_cb_style)
+        self._combo_host.addItem("Все хосты")
+        self._combo_host.currentIndexChanged.connect(self._refresh)
+        fl.addWidget(self._combo_host)
+
+        fl.addStretch()
+        return w
+
     # ── Tab: Overview ─────────────────────────────────────────────────────
 
     def _build_overview_tab(self) -> QWidget:
@@ -66,7 +109,6 @@ class DashboardTab(QWidget):
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(14)
 
-        # Left — threat severity bars
         grp_sev = QGroupBox("Сводка угроз")
         gs = QVBoxLayout(grp_sev)
         gs.setSpacing(12)
@@ -90,14 +132,12 @@ class DashboardTab(QWidget):
             cnt.setFixedWidth(35)
             cnt.setAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            cnt.setStyleSheet(
-                "color:#6e7681;font-size:12px;font-weight:bold;")
+            cnt.setStyleSheet("color:#6e7681;font-size:12px;font-weight:bold;")
             row.addWidget(lbl); row.addWidget(bar); row.addWidget(cnt)
             gs.addLayout(row)
             self._bars[label] = (bar, cnt)
         gs.addStretch()
 
-        # Right — quick event preview (last 10)
         grp_quick = QGroupBox("Последние события")
         gq = QVBoxLayout(grp_quick)
         self._quick_log = QTextEdit()
@@ -209,13 +249,67 @@ class DashboardTab(QWidget):
         fl.addWidget(t); fl.addWidget(v)
         return f, v
 
+    # ── Filtering ─────────────────────────────────────────────────────────
+
+    def _get_filtered(self, events: list) -> list:
+        now = time.time()
+        time_idx = self._combo_time.currentIndex()
+        host_sel = self._combo_host.currentText()
+
+        result = []
+        for evt in events:
+            ts = evt.get("ts", now)
+            if time_idx == 1 and now - ts > 3600:
+                continue
+            if time_idx == 2:
+                evt_date = datetime.datetime.fromtimestamp(ts).date()
+                if evt_date != datetime.datetime.now().date():
+                    continue
+            if time_idx == 3 and now - ts > 86400:
+                continue
+
+            if host_sel != "Все хосты":
+                evt_host = evt.get("host", "")
+                if host_sel == "Локальный":
+                    if evt_host:
+                        continue
+                elif evt_host != host_sel:
+                    continue
+
+            result.append(evt)
+        return result
+
+    def _update_host_combo(self, recent: list):
+        seen = sorted({evt["host"] for evt in recent if evt.get("host")})
+        current = self._combo_host.currentText()
+
+        new_items = ["Все хосты", "Локальный"] + seen
+        old_items = [self._combo_host.itemText(i)
+                     for i in range(self._combo_host.count())]
+        if new_items == old_items:
+            return
+
+        self._combo_host.blockSignals(True)
+        self._combo_host.clear()
+        for item in new_items:
+            self._combo_host.addItem(item)
+        idx = self._combo_host.findText(current)
+        self._combo_host.setCurrentIndex(max(0, idx))
+        self._combo_host.blockSignals(False)
+
     # ── Refresh ───────────────────────────────────────────────────────────
 
     def _refresh(self):
         s      = DashboardTab.stats
         recent = s["recent"]
 
-        # Stat cards
+        self._update_host_combo(recent)
+        filtered = self._get_filtered(recent)
+
+        col_map = {"critical": "#f85149", "high": "#d29922",
+                   "info": "#8b949e", "ok": "#3fb950"}
+
+        # Stat cards (always global, not filtered)
         self._c_hash[1].setText(str(s["hash_lookups"]))
         self._c_mal[1].setText(str(s["malicious"]))
         self._c_yara[1].setText(str(s["yara_hits"]))
@@ -223,12 +317,9 @@ class DashboardTab(QWidget):
         self._c_susp[1].setText(str(s["suspicious_procs"]))
         self._c_highrisk[1].setText(str(s["high_risk_ips"]))
 
-        col_map = {"critical": "#f85149", "high": "#d29922",
-                   "info": "#8b949e", "ok": "#3fb950"}
-
-        # ── Tab 1: Overview — quick log (last 10) ─────────────────────
+        # ── Tab 1: Overview — quick log (last 10 from filtered) ───────
         self._quick_log.clear()
-        for evt in reversed(recent[-10:]):
+        for evt in reversed(filtered[-10:]):
             col = col_map.get(evt.get("level", "info"), "#8b949e")
             self._quick_log.append(
                 f'<span style="color:#484f58">{evt.get("time","")}</span> '
@@ -236,9 +327,8 @@ class DashboardTab(QWidget):
                 f'<span style="color:#c9d1d9">{evt.get("msg","")}</span>'
             )
 
-        # Severity bars
         counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
-        for evt in recent:
+        for evt in filtered:
             sev = evt.get("severity", "")
             if sev in counts:
                 counts[sev] += 1
@@ -248,11 +338,11 @@ class DashboardTab(QWidget):
             bar.setValue(int(n / total * 100))
             cnt.setText(str(n))
 
-        # ── Tab 2: Events — full log ──────────────────────────────────
-        n_events = len(recent)
+        # ── Tab 2: Events — full filtered log ─────────────────────────
+        n_events = len(filtered)
         self._lbl_event_count.setText(f"{n_events} событий")
         self.log.clear()
-        for evt in reversed(recent[-100:]):
+        for evt in reversed(filtered[-100:]):
             col = col_map.get(evt.get("level", "info"), "#8b949e")
             self.log.append(
                 f'<span style="color:#484f58">{evt.get("time","")}</span> '
@@ -261,7 +351,7 @@ class DashboardTab(QWidget):
             )
 
         # ── Tab 3: Local scans ────────────────────────────────────────
-        scans = [e for e in recent if e.get("scan") and not e.get("host")]
+        scans = [e for e in filtered if e.get("scan") and not e.get("host")]
         n_scans = len(scans)
         self._lbl_scans_count.setText(f"{n_scans} записей")
         self.tbl.setRowCount(0)
@@ -280,7 +370,7 @@ class DashboardTab(QWidget):
                 self.tbl.setItem(row, i, item)
 
         # ── Tab 4: Remote scans ───────────────────────────────────────
-        remote = [e for e in recent if e.get("host")]
+        remote = [e for e in filtered if e.get("host")]
         n_remote = len(remote)
         self._lbl_remote_count.setText(f"{n_remote} записей")
         self.remote_tbl.setRowCount(0)
@@ -324,6 +414,7 @@ class DashboardTab(QWidget):
     def log_event(type_, msg, level="info", severity="",
                   target="", scan=False, host=""):
         DashboardTab.stats["recent"].append({
+            "ts":       time.time(),
             "time":     datetime.datetime.now().strftime("%H:%M:%S"),
             "type":     type_,
             "msg":      msg,
