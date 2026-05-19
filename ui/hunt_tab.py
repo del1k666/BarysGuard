@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 from workers.hunt_worker import HuntWorker
 from ui.dashboard_tab import DashboardTab
+from core.i18n import t
 
 
 class HuntTab(QWidget):
@@ -21,57 +22,64 @@ class HuntTab(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
 
         # Mutex search
-        grp_mutex = QGroupBox("Mutex Search")
-        ml = QHBoxLayout(grp_mutex)
-        ml.addWidget(QLabel("Имя mutex:"))
+        self._grp_mutex = QGroupBox(t("hunt_mutex_grp"))
+        ml = QHBoxLayout(self._grp_mutex)
+        self._lbl_mutex = QLabel(t("hunt_mutex_lbl"))
+        ml.addWidget(self._lbl_mutex)
         self._mutex_inp = QLineEdit()
         self._mutex_inp.setPlaceholderText("Global\\\\MyMalwareMutex")
         ml.addWidget(self._mutex_inp)
-        self._btn_mutex = QPushButton("Искать")
+        self._btn_mutex = QPushButton(t("hunt_search_btn"))
         self._btn_mutex.setFixedWidth(90)
         self._btn_mutex.clicked.connect(self._hunt_mutex)
         ml.addWidget(self._btn_mutex)
-        lay.addWidget(grp_mutex)
+        lay.addWidget(self._grp_mutex)
 
         # Hash search
-        grp_hash = QGroupBox("Hash Search  (SHA256 / MD5)")
-        hl = QVBoxLayout(grp_hash)
+        self._grp_hash = QGroupBox(t("hunt_hash_grp"))
+        hl = QVBoxLayout(self._grp_hash)
         hrow1 = QHBoxLayout()
-        hrow1.addWidget(QLabel("Hash:"))
+        self._lbl_hash = QLabel(t("hunt_hash_lbl"))
+        hrow1.addWidget(self._lbl_hash)
         self._hash_inp = QLineEdit()
-        self._hash_inp.setPlaceholderText("sha256 или md5 хэш файла...")
+        self._hash_inp.setPlaceholderText("sha256 / md5")
         hrow1.addWidget(self._hash_inp)
         hl.addLayout(hrow1)
         hrow2 = QHBoxLayout()
-        hrow2.addWidget(QLabel("Путь поиска:"))
+        self._lbl_path = QLabel(t("hunt_path_lbl"))
+        hrow2.addWidget(self._lbl_path)
         self._hash_path = QLineEdit("C:\\")
         hrow2.addWidget(self._hash_path)
-        self._btn_hash = QPushButton("Искать")
+        self._btn_hash = QPushButton(t("hunt_search_btn"))
         self._btn_hash.setFixedWidth(90)
         self._btn_hash.clicked.connect(self._hunt_hash)
         hrow2.addWidget(self._btn_hash)
         hl.addLayout(hrow2)
-        lay.addWidget(grp_hash)
+        lay.addWidget(self._grp_hash)
 
         # Process search
-        grp_proc = QGroupBox("Process Search")
-        pl = QHBoxLayout(grp_proc)
-        pl.addWidget(QLabel("Имя процесса:"))
+        self._grp_proc = QGroupBox(t("hunt_proc_grp"))
+        pl = QHBoxLayout(self._grp_proc)
+        self._lbl_proc = QLabel(t("hunt_proc_lbl"))
+        pl.addWidget(self._lbl_proc)
         self._proc_inp = QLineEdit()
         self._proc_inp.setPlaceholderText("svchost.exe")
         pl.addWidget(self._proc_inp)
-        self._btn_proc = QPushButton("Искать")
+        self._btn_proc = QPushButton(t("hunt_search_btn"))
         self._btn_proc.setFixedWidth(90)
         self._btn_proc.clicked.connect(self._hunt_proc)
         pl.addWidget(self._btn_proc)
-        lay.addWidget(grp_proc)
+        lay.addWidget(self._grp_proc)
 
-        self._status = QLabel("Введи значение и нажми Искать")
+        self._status = QLabel(t("hunt_status_hint"))
         self._status.setStyleSheet("color:#6e7681;font-size:11px;")
         lay.addWidget(self._status)
 
         self._tbl = QTableWidget(0, 4)
-        self._tbl.setHorizontalHeaderLabels(["Хост", "Тип", "Результат", "Время"])
+        self._tbl.setHorizontalHeaderLabels([
+            t("hunt_tbl_host"), t("hunt_tbl_type"),
+            t("hunt_tbl_result"), t("hunt_tbl_time"),
+        ])
         self._tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._tbl.horizontalHeader().resizeSection(1, 90)
         self._tbl.horizontalHeader().resizeSection(2, 280)
@@ -87,24 +95,38 @@ class HuntTab(QWidget):
             return
         self._tbl.setRowCount(0)
         self._set_buttons(False)
-        self._status.setText("Поиск по хостам...")
+        self._status.setText(t("hunt_searching"))
+
+        if self._worker is not None:
+            try:
+                self._worker.result.disconnect()
+                self._worker.progress.disconnect()
+                self._worker.done.disconnect()
+            except RuntimeError:
+                pass
+
         self._worker = HuntWorker(payload)
         self._worker.result.connect(self._on_result)
         self._worker.progress.connect(self._status.setText)
         self._worker.done.connect(self._on_done)
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     def _hunt_mutex(self):
         name = self._mutex_inp.text().strip()
         if not name:
-            self._status.setText("Введи имя mutex")
+            self._status.setText(t("hunt_no_mutex"))
             return
         self._hunt({"mutex": name})
 
     def _hunt_hash(self):
-        h = self._hash_inp.text().strip()
+        h = self._hash_inp.text().strip().lower()
         if not h:
-            self._status.setText("Введи хэш")
+            self._status.setText(t("hunt_no_hash"))
+            return
+        _hex = set("0123456789abcdef")
+        if len(h) not in (32, 64) or not all(c in _hex for c in h):
+            self._status.setText(t("hunt_bad_hash"))
             return
         path = self._hash_path.text().strip() or "C:\\"
         self._hunt({"hashes": [h], "hash_path": path})
@@ -112,7 +134,7 @@ class HuntTab(QWidget):
     def _hunt_proc(self):
         name = self._proc_inp.text().strip()
         if not name:
-            self._status.setText("Введи имя процесса")
+            self._status.setText(t("hunt_no_proc"))
             return
         self._hunt({"process_name": name})
 
@@ -164,8 +186,25 @@ class HuntTab(QWidget):
 
     def _on_done(self):
         self._set_buttons(True)
-        self._status.setText(f"Готово — результатов: {self._tbl.rowCount()}")
+        self._status.setText(t("hunt_done", n=self._tbl.rowCount()))
 
     def _set_buttons(self, enabled: bool):
         for btn in (self._btn_mutex, self._btn_hash, self._btn_proc):
             btn.setEnabled(enabled)
+
+    def retranslate(self, _lang: str = ""):
+        self._grp_mutex.setTitle(t("hunt_mutex_grp"))
+        self._grp_hash.setTitle(t("hunt_hash_grp"))
+        self._grp_proc.setTitle(t("hunt_proc_grp"))
+        self._lbl_mutex.setText(t("hunt_mutex_lbl"))
+        self._lbl_hash.setText(t("hunt_hash_lbl"))
+        self._lbl_path.setText(t("hunt_path_lbl"))
+        self._lbl_proc.setText(t("hunt_proc_lbl"))
+        self._btn_mutex.setText(t("hunt_search_btn"))
+        self._btn_hash.setText(t("hunt_search_btn"))
+        self._btn_proc.setText(t("hunt_search_btn"))
+        self._status.setText(t("hunt_status_hint"))
+        self._tbl.setHorizontalHeaderLabels([
+            t("hunt_tbl_host"), t("hunt_tbl_type"),
+            t("hunt_tbl_result"), t("hunt_tbl_time"),
+        ])
