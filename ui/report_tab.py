@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from constants import BUILTIN_YARA_RULES
 from ui.dashboard_tab import DashboardTab
+from core.i18n import t
 
 
 class ReportTab(QWidget):
@@ -17,54 +18,67 @@ class ReportTab(QWidget):
     def _build(self):
         lay = QVBoxLayout(self); lay.setSpacing(10); lay.setContentsMargins(16,16,16,16)
 
-        # Параметры
-        grp = QGroupBox("Параметры отчёта")
-        gl  = QVBoxLayout(grp); gl.setSpacing(8)
+        self._grp_params = QGroupBox(t("report_params_grp"))
+        gl = QVBoxLayout(self._grp_params); gl.setSpacing(8)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Аналитик:"))
-        self.analyst = QLineEdit("Аналитик"); row1.addWidget(self.analyst)
-        row1.addWidget(QLabel("Организация:"))
+        self._lbl_analyst = QLabel(t("report_analyst_lbl")); row1.addWidget(self._lbl_analyst)
+        self.analyst = QLineEdit(t("report_analyst_def")); row1.addWidget(self.analyst)
+        self._lbl_org = QLabel(t("report_org_lbl")); row1.addWidget(self._lbl_org)
         self.org = QLineEdit("BarysGuard"); row1.addWidget(self.org)
         gl.addLayout(row1)
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Заголовок:"))
-        self.title_inp = QLineEdit("Отчёт об анализе угроз")
+        self._lbl_title = QLabel(t("report_title_lbl")); row2.addWidget(self._lbl_title)
+        self.title_inp = QLineEdit(t("report_title_def"))
         row2.addWidget(self.title_inp); gl.addLayout(row2)
 
         chk_row = QHBoxLayout()
-        self.chk_stats = QCheckBox("Статистика сессии"); self.chk_stats.setChecked(True)
-        self.chk_events = QCheckBox("Все события"); self.chk_events.setChecked(True)
-        self.chk_yara_rules = QCheckBox("YARA правила"); self.chk_yara_rules.setChecked(True)
-        self.chk_net = QCheckBox("Network Intel"); self.chk_net.setChecked(True)
+        self.chk_stats     = QCheckBox(t("report_chk_stats"));  self.chk_stats.setChecked(True)
+        self.chk_events    = QCheckBox(t("report_chk_events")); self.chk_events.setChecked(True)
+        self.chk_yara_rules= QCheckBox(t("report_chk_yara"));   self.chk_yara_rules.setChecked(True)
+        self.chk_net       = QCheckBox(t("report_chk_net"));    self.chk_net.setChecked(True)
         for c in [self.chk_stats, self.chk_events, self.chk_yara_rules, self.chk_net]:
             chk_row.addWidget(c)
         chk_row.addStretch()
         gl.addLayout(chk_row)
-        lay.addWidget(grp)
+        lay.addWidget(self._grp_params)
 
         btn_row = QHBoxLayout()
-        btn_prev = QPushButton("Предпросмотр")
-        btn_prev.setObjectName("secondaryBtn"); btn_prev.setFixedHeight(36)
-        btn_prev.clicked.connect(self._preview); btn_row.addWidget(btn_prev)
+        self._btn_preview = QPushButton(t("report_preview_btn"))
+        self._btn_preview.setObjectName("secondaryBtn"); self._btn_preview.setFixedHeight(36)
+        self._btn_preview.clicked.connect(self._preview); btn_row.addWidget(self._btn_preview)
 
-        btn_html = QPushButton("Экспорт HTML"); btn_html.setFixedHeight(36)
-        btn_html.clicked.connect(self._export_html); btn_row.addWidget(btn_html)
+        self._btn_html = QPushButton(t("report_html_btn")); self._btn_html.setFixedHeight(36)
+        self._btn_html.clicked.connect(self._export_html); btn_row.addWidget(self._btn_html)
 
-        btn_xl = QPushButton("Экспорт Excel")
-        btn_xl.setObjectName("secondaryBtn"); btn_xl.setFixedHeight(36)
-        btn_xl.clicked.connect(self._export_excel); btn_row.addWidget(btn_xl)
+        self._btn_xl = QPushButton(t("report_excel_btn"))
+        self._btn_xl.setObjectName("secondaryBtn"); self._btn_xl.setFixedHeight(36)
+        self._btn_xl.clicked.connect(self._export_excel); btn_row.addWidget(self._btn_xl)
 
-        btn_txt = QPushButton("Экспорт TXT")
-        btn_txt.setObjectName("secondaryBtn"); btn_txt.setFixedHeight(36)
-        btn_txt.clicked.connect(self._export_txt); btn_row.addWidget(btn_txt)
+        self._btn_txt = QPushButton(t("report_txt_btn"))
+        self._btn_txt.setObjectName("secondaryBtn"); self._btn_txt.setFixedHeight(36)
+        self._btn_txt.clicked.connect(self._export_txt); btn_row.addWidget(self._btn_txt)
         lay.addLayout(btn_row)
 
         self.preview = QTextEdit(); self.preview.setReadOnly(True)
-        self.preview.setPlaceholderText(
-            "Нажми Предпросмотр чтобы увидеть отчёт с реальными данными сессии...")
+        self.preview.setPlaceholderText(t("report_placeholder"))
         lay.addWidget(self.preview)
+
+    def retranslate(self, _lang: str = ""):
+        self._grp_params.setTitle(t("report_params_grp"))
+        self._lbl_analyst.setText(t("report_analyst_lbl"))
+        self._lbl_org.setText(t("report_org_lbl"))
+        self._lbl_title.setText(t("report_title_lbl"))
+        self.chk_stats.setText(t("report_chk_stats"))
+        self.chk_events.setText(t("report_chk_events"))
+        self.chk_yara_rules.setText(t("report_chk_yara"))
+        self.chk_net.setText(t("report_chk_net"))
+        self._btn_preview.setText(t("report_preview_btn"))
+        self._btn_html.setText(t("report_html_btn"))
+        self._btn_xl.setText(t("report_excel_btn"))
+        self._btn_txt.setText(t("report_txt_btn"))
+        self.preview.setPlaceholderText(t("report_placeholder"))
 
     def _collect_data(self):
         """Собирает все реальные данные из DashboardTab.stats"""
@@ -82,9 +96,17 @@ class ReportTab(QWidget):
 
         # Severity counts из YARA событий
         sev_counts = {"Critical":0,"High":0,"Medium":0,"Low":0}
+        _level_map = {"critical":"Critical","high":"High","medium":"Medium","low":"Low"}
         for e in yara_events:
-            sv = e.get("severity","").capitalize()
-            if sv in sev_counts: sev_counts[sv] += 1
+            sv = e.get("severity","")
+            if not sv or sv.upper() == e.get("type","").upper():
+                sv = _level_map.get(e.get("level","").lower(), "")
+            sv = sv.capitalize()
+            if sv in sev_counts:
+                sev_counts[sv] += 1
+
+        vt_hits = [r for r in DashboardTab.remote_hash_vt_results
+                   if r.get("status") in ("MALICIOUS", "SUSPICIOUS")]
 
         return {
             "title":    self.title_inp.text(),
@@ -99,6 +121,7 @@ class ReportTab(QWidget):
             "quar_events":    quar_events,
             "remote_events":  remote_events,
             "sev_counts":     sev_counts,
+            "vt_hits":        vt_hits,
             "total_events": len(events),
         }
 
@@ -149,6 +172,15 @@ class ReportTab(QWidget):
             lines.append("-" * 40)
             for e in d["hash_events"]:
                 lines.append(f"  {e.get('msg','')}")
+            lines.append("")
+
+        if d.get("vt_hits"):
+            lines.append(f"VT REMOTE SCAN — УГРОЗЫ ({len(d['vt_hits'])})")
+            lines.append("-" * 40)
+            for r in d["vt_hits"]:
+                lines.append(
+                    f"  [{r.get('status','?'):<10}] {r.get('host','')} — {r.get('file','')}  "
+                    f"({r.get('mal',0)}/{r.get('total',0)} engines)")
             lines.append("")
 
         if self.chk_net.isChecked() and d["net_events"]:
@@ -298,6 +330,24 @@ tr:hover td{{background:#1c2128;}}
 <tr><th>Время</th><th>Результат</th></tr>
 {hash_rows}</table></div>"""
 
+        if d.get("vt_hits"):
+            vt_rows = ""
+            for r in d["vt_hits"]:
+                st  = r.get("status","?")
+                col = "#f85149" if st == "MALICIOUS" else "#d29922"
+                vt_rows += (
+                    f'<tr><td style="color:#58a6ff">{r.get("host","")}</td>'
+                    f'<td style="color:{col};font-weight:bold">{st}</td>'
+                    f'<td>{r.get("file","")}</td>'
+                    f'<td style="color:{col}">{r.get("mal",0)}/{r.get("total",0)}</td></tr>\n'
+                )
+            html += (
+                f'<h2>VT Remote Hash Scan — Угрозы ({len(d["vt_hits"])})</h2>'
+                f'<div class="section"><table>'
+                f'<tr><th>Хост</th><th>Статус</th><th>Файл</th><th>Engines</th></tr>'
+                f'{vt_rows}</table></div>'
+            )
+
         if d["net_events"]:
             html += f"""<h2>Network Intelligence ({len(d["net_events"])})</h2>
 <div class="section"><table>
@@ -414,6 +464,12 @@ tr:hover td{{background:#1c2128;}}
         _sheet(ws6, ["Время", "Хост", "Тип", "Правило/Файл"],
                [[e.get("time", ""), e.get("host", ""), e.get("type", ""), e.get("msg", "")]
                 for e in d["remote_events"]])
+
+        ws7 = wb.create_sheet("VT Remote")
+        _sheet(ws7, ["Хост", "Файл", "SHA256", "Статус", "Malicious", "Total"],
+               [[r.get("host",""), r.get("file",""), r.get("sha256",""),
+                 r.get("status",""), r.get("mal",0), r.get("total",0)]
+                for r in d.get("vt_hits", [])])
 
         path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить Excel отчёт", "report.xlsx", "Excel (*.xlsx)")
