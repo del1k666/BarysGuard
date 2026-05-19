@@ -86,7 +86,8 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(IOCTab(),              t("tab_ioc"))
         self._tabs.addTab(self._yara_tab,        t("tab_yara"))
         self._tabs.addTab(NetIntelTab(),         t("tab_net"))
-        self._tabs.addTab(ReportTab(),           t("tab_report"))
+        self._report_tab = ReportTab()
+        self._tabs.addTab(self._report_tab,      t("tab_report"))
         self.mem_tab = MemoryScannerTab()
         self._tabs.addTab(self.mem_tab,          t("tab_memory"))
         self.quarantine_tab = QuarantineTab()
@@ -120,8 +121,9 @@ class MainWindow(QMainWindow):
         for i, key in enumerate(_TAB_KEYS):
             self._tabs.setTabText(i, t(key))
         self._refresh_host_combo()
-        # Retranslate tabs that support it
-        for tab in (self._yara_tab, self._settings_tab, self._hosts_tab):
+        # Retranslate all tabs that support it
+        for tab in (self.dash_tab, self._yara_tab, self._settings_tab, self._hosts_tab,
+                    self._hunt_tab, self._report_tab, self.quarantine_tab):
             if hasattr(tab, "retranslate"):
                 tab.retranslate(lang)
 
