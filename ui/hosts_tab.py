@@ -655,14 +655,12 @@ class HostsTab(QWidget):
         lay.setContentsMargins(16, 16, 16, 16); lay.setSpacing(12)
 
         # Warning banner
-        warn = QLabel(
-            "⚠  ВНИМАНИЕ: Изоляция заблокирует весь сетевой трафик хоста через Windows Firewall.\n"
-            "Убедитесь, что ваш IP-адрес указан ниже — иначе потеряете доступ к агенту.")
-        warn.setWordWrap(True)
-        warn.setStyleSheet(
+        self._iso_warn = QLabel(t("hosts_iso_warn"))
+        self._iso_warn.setWordWrap(True)
+        self._iso_warn.setStyleSheet(
             "color:#d29922;font-size:12px;padding:10px 12px;"
             "background:#2d2208;border:1px solid #4d3800;border-radius:6px;")
-        lay.addWidget(warn)
+        lay.addWidget(self._iso_warn)
 
         # Status card
         self._iso_status_card = QFrame()
@@ -672,38 +670,38 @@ class HostsTab(QWidget):
         sc.setContentsMargins(16, 12, 16, 12)
         self._iso_status_icon  = QLabel("●")
         self._iso_status_icon.setStyleSheet("font-size:24px;color:#6e7681;")
-        self._iso_status_text  = QLabel("Статус неизвестен")
+        self._iso_status_text  = QLabel(t("hosts_iso_unknown"))
         self._iso_status_text.setStyleSheet("font-size:14px;font-weight:bold;color:#8b949e;")
         sc.addWidget(self._iso_status_icon); sc.addWidget(self._iso_status_text); sc.addStretch()
-        btn_check = QPushButton("⟳ Проверить")
-        btn_check.setObjectName("secondaryBtn"); btn_check.setFixedHeight(32)
-        btn_check.clicked.connect(self._check_isolation_status)
-        sc.addWidget(btn_check)
+        self._btn_iso_check = QPushButton(t("hosts_iso_check_btn"))
+        self._btn_iso_check.setObjectName("secondaryBtn"); self._btn_iso_check.setFixedHeight(32)
+        self._btn_iso_check.clicked.connect(self._check_isolation_status)
+        sc.addWidget(self._btn_iso_check)
         lay.addWidget(self._iso_status_card)
 
         # Management IP
-        grp_ip = QGroupBox("Управляющий IP (будет разрешён через firewall)")
-        gi = QHBoxLayout(grp_ip)
+        self._grp_iso_mgmt = QGroupBox(t("hosts_iso_mgmt_grp"))
+        gi = QHBoxLayout(self._grp_iso_mgmt)
         self._iso_mgmt_ip = QLineEdit()
-        self._iso_mgmt_ip.setPlaceholderText("192.168.1.X — ваш IP-адрес")
+        self._iso_mgmt_ip.setPlaceholderText(t("hosts_iso_mgmt_ph"))
         self._iso_mgmt_ip.setText(_local_ip())
         gi.addWidget(self._iso_mgmt_ip)
-        lay.addWidget(grp_ip)
+        lay.addWidget(self._grp_iso_mgmt)
 
         # Action buttons
         btn_row = QHBoxLayout(); btn_row.setSpacing(10)
-        self._btn_isolate = QPushButton("🔒  Изолировать хост")
+        self._btn_isolate = QPushButton(t("hosts_iso_btn"))
         self._btn_isolate.setObjectName("dangerBtn"); self._btn_isolate.setFixedHeight(42)
         self._btn_isolate.clicked.connect(self._isolate_host)
-        self._btn_restore = QPushButton("🔓  Восстановить сеть")
+        self._btn_restore = QPushButton(t("hosts_restore_btn"))
         self._btn_restore.setObjectName("secondaryBtn"); self._btn_restore.setFixedHeight(42)
         self._btn_restore.clicked.connect(self._restore_host)
         btn_row.addWidget(self._btn_isolate); btn_row.addWidget(self._btn_restore)
         lay.addLayout(btn_row)
 
         # Isolation log
-        grp_log = QGroupBox("Журнал изоляции")
-        gl = QVBoxLayout(grp_log)
+        self._grp_iso_log = QGroupBox(t("hosts_iso_log_grp"))
+        gl = QVBoxLayout(self._grp_iso_log)
         self._iso_log = QTextEdit()
         self._iso_log.setReadOnly(True)
         self._iso_log.setMaximumHeight(160)
@@ -711,7 +709,7 @@ class HostsTab(QWidget):
             "background:#0a0e14;border:1px solid #21262d;border-radius:6px;"
             "font-family:Consolas,monospace;font-size:11px;color:#c9d1d9;padding:6px;")
         gl.addWidget(self._iso_log)
-        lay.addWidget(grp_log)
+        lay.addWidget(self._grp_iso_log)
         lay.addStretch()
         return w
 
@@ -931,6 +929,14 @@ class HostsTab(QWidget):
         # Results table headers
         self._tbl.setHorizontalHeaderLabels([
             t("hosts_tbl_type_hdr"), t("hosts_tbl_sev_hdr"), t("hosts_tbl_file_hdr")])
+        # Isolation tab
+        self._iso_warn.setText(t("hosts_iso_warn"))
+        self._btn_iso_check.setText(t("hosts_iso_check_btn"))
+        self._grp_iso_mgmt.setTitle(t("hosts_iso_mgmt_grp"))
+        self._iso_mgmt_ip.setPlaceholderText(t("hosts_iso_mgmt_ph"))
+        self._btn_isolate.setText(t("hosts_iso_btn"))
+        self._btn_restore.setText(t("hosts_restore_btn"))
+        self._grp_iso_log.setTitle(t("hosts_iso_log_grp"))
         self._reload_hosts()
 
     # ── Host list ──────────────────────────────────────────────────────────────
@@ -1510,13 +1516,13 @@ class HostsTab(QWidget):
         host = self._get_selected_host()
         if not host:
             return
-        self._iso_status_text.setText("⟳ Проверка...")
+        self._iso_status_text.setText(t("hosts_iso_checking"))
         self._iso_status_icon.setStyleSheet("font-size:24px;color:#6e7681;")
         self._iso_worker = NetworkIsolationWorker(host, "status")
         self._iso_worker.done.connect(self._on_iso_status)
         self._iso_worker.error.connect(lambda e: (
-            self._iso_status_text.setText(f"✘ Ошибка: {e[:60]}"),
-            self._iso_log_append(f"✘ Ошибка проверки: {e}", "#f85149")))
+            self._iso_status_text.setText(t("hosts_iso_err", e=str(e)[:60])),
+            self._iso_log_append(t("hosts_iso_err", e=str(e)), "#f85149")))
         self._iso_worker.start()
 
     def _on_iso_status(self, data: dict):
@@ -1524,13 +1530,13 @@ class HostsTab(QWidget):
         if isolated:
             self._iso_status_icon.setStyleSheet("font-size:24px;color:#f85149;")
             self._iso_status_text.setText(
-                "<span style='color:#f85149;font-weight:bold'>🔴  ИЗОЛИРОВАН</span>")
+                f"<span style='color:#f85149;font-weight:bold'>{t('hosts_iso_isolated')}</span>")
             self._iso_status_card.setStyleSheet(
                 "QFrame{background:#2d0f0f;border:1px solid #6e1212;border-radius:8px;}")
         else:
             self._iso_status_icon.setStyleSheet("font-size:24px;color:#3fb950;")
             self._iso_status_text.setText(
-                "<span style='color:#3fb950;font-weight:bold'>🟢  Подключён к сети</span>")
+                f"<span style='color:#3fb950;font-weight:bold'>{t('hosts_iso_connected')}</span>")
             self._iso_status_card.setStyleSheet(
                 "QFrame{background:#0f2d14;border:1px solid #1a6e2c;border-radius:8px;}")
 
@@ -1542,19 +1548,17 @@ class HostsTab(QWidget):
             return
         mgmt_ip = self._iso_mgmt_ip.text().strip()
         if not mgmt_ip:
-            QMessageBox.warning(self, "Изоляция",
-                "Укажите управляющий IP-адрес, иначе потеряете доступ к агенту."); return
+            QMessageBox.warning(self, t("hosts_iso_no_mgmt_title"),
+                t("hosts_iso_no_mgmt_msg")); return
         if QMessageBox.question(
-            self, "Подтверждение изоляции",
-            f"Изолировать хост <b>{host['name']}</b> ({host['ip']}) от сети?\n\n"
-            f"Разрешённый IP: {mgmt_ip}\n\n"
-            "Весь остальной трафик будет заблокирован через Windows Firewall.",
+            self, t("hosts_iso_confirm_title"),
+            t("hosts_iso_confirm_msg", name=host['name'], ip=host['ip'], mgmt=mgmt_ip),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) != QMessageBox.StandardButton.Yes:
             return
 
         self._btn_isolate.setEnabled(False)
-        self._iso_status_text.setText("⟳ Применение правил firewall...")
+        self._iso_status_text.setText(t("hosts_iso_applying"))
         self._iso_log_append(
             f"▶ Изоляция {host['name']} ({host['ip']}) | mgmt: {mgmt_ip}", "#d29922")
         DashboardTab.log_event("ISOLATE", f"Изоляция {host['name']} ({host['ip']})",
