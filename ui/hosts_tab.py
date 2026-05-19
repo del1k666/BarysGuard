@@ -1,6 +1,8 @@
+import csv
 import re
 import socket
 from datetime import datetime
+from config import Config
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
@@ -16,7 +18,7 @@ from core.hosts_config import load_hosts, add_host, remove_host, update_host
 from workers.host_worker import (
     PingWorker, RemoteScanWorker, DeployWorker,
     RemoteProcessListWorker, RemoteMemScanWorker,
-    NetworkIsolationWorker,
+    NetworkIsolationWorker, RemoteHashVTWorker,
 )
 from constants import BUILTIN_YARA_RULES
 from core.i18n import t
@@ -106,13 +108,18 @@ class HostsTab(QWidget):
         self._proc_worker:   RemoteProcessListWorker | None = None
         self._mem_worker:    RemoteMemScanWorker | None = None
         self._iso_worker:    NetworkIsolationWorker | None = None
+        self._vt_worker:     RemoteHashVTWorker | None = None
+        self._hash_row_map: dict = {}   # file_path -> (row_index, sha256)
 
         self._mem_stop_requested: bool = False
-        self._file_custom_rules: dict = {}
-        self._mem_custom_rules:  dict = {}
+        self._shared_custom_rules: dict = {}
+        self._file_custom_rules = self._shared_custom_rules
+        self._mem_custom_rules  = self._shared_custom_rules
         self._remote_procs: list = []
+        self._vt_results: list = []
 
         self._build()
+        self._showing_hint = True
         self._reload_hosts()
         self._start_ping_timer()
         lang_signal.changed.connect(self.retranslate)
@@ -147,6 +154,14 @@ class HostsTab(QWidget):
         self._btn_remove.clicked.connect(self._remove_host)
         row_btns.addWidget(self._btn_add); row_btns.addWidget(self._btn_remove)
         ll.addLayout(row_btns)
+
+        self._btn_import_csv = QPushButton("📥  Импорт CSV")
+        self._btn_import_csv.setObjectName("secondaryBtn")
+        self._btn_import_csv.setToolTip(
+            "Импортировать хосты из CSV-файла.\n"
+            "Формат: name,ip,port,token (заголовок обязателен)")
+        self._btn_import_csv.clicked.connect(self._import_hosts_csv)
+        ll.addWidget(self._btn_import_csv)
         outer.addWidget(left)
 
         # ── RIGHT: content ─────────────────────────────────────────────────
@@ -164,13 +179,13 @@ class HostsTab(QWidget):
         self._sub_tabs.setEnabled(False)
         self._sub_tabs.setUsesScrollButtons(True)
         self._sub_tabs.setStyleSheet(
-            "QTabBar::tab{padding:8px 16px;font-size:12px;}"
+            "QTabBar::tab{padding:8px 16px;font-size:12px;min-height:22px;}"
             "QTabBar::tab:selected{font-weight:bold;}")
-        self._sub_tabs.addTab(self._build_status_tab(),  "📊  Статус")
-        self._sub_tabs.addTab(self._build_file_tab(),    "📁  Файловый скан")
-        self._sub_tabs.addTab(self._build_memory_tab(),  "🔍  Memory Scan")
-        self._sub_tabs.addTab(self._build_results_tab(), "📋  Результаты")
-        self._sub_tabs.addTab(self._build_isolate_tab(), "🔒  Изоляция")
+        self._sub_tabs.addTab(self._build_status_tab(),  t("hosts_sub_status"))
+        self._sub_tabs.addTab(self._build_file_tab(),    t("hosts_sub_file"))
+        self._sub_tabs.addTab(self._build_memory_tab(),  t("hosts_sub_memory"))
+        self._sub_tabs.addTab(self._build_results_tab(), t("hosts_sub_results"))
+        self._sub_tabs.addTab(self._build_isolate_tab(), t("hosts_sub_isolate"))
         self._sub_tabs.currentChanged.connect(self._on_tab_changed)
         rl.addWidget(self._sub_tabs, 1)
 
@@ -193,44 +208,44 @@ class HostsTab(QWidget):
         self._st_name   = QLabel("—")
         self._st_name.setStyleSheet("font-size:18px;font-weight:bold;color:#58a6ff;")
         self._st_name.setWordWrap(True)
-        self._st_addr   = self._detail_row(cl, "Адрес")
-        self._st_seen   = self._detail_row(cl, "Последний пинг")
-        self._st_scan   = self._detail_row(cl, "Последний скан")
-        self._st_status = self._detail_row(cl, "Статус")
+        self._st_addr_lbl, self._st_addr     = self._detail_row(cl, t("hosts_addr_lbl"))
+        self._st_seen_lbl, self._st_seen     = self._detail_row(cl, t("hosts_last_ping_lbl"))
+        self._st_scan_lbl, self._st_scan     = self._detail_row(cl, t("hosts_last_scan_lbl"))
+        self._st_status_lbl, self._st_status = self._detail_row(cl, t("hosts_status_lbl"))
         cl.insertWidget(0, self._st_name)
         lay.addWidget(card)
 
         # Action buttons
-        grp_act = QGroupBox("Действия с хостом")
-        ga = QHBoxLayout(grp_act); ga.setSpacing(8)
-        self._btn_ping = QPushButton("⟳  Пинговать")
+        self._grp_act = QGroupBox(t("hosts_actions_grp"))
+        ga = QHBoxLayout(self._grp_act); ga.setSpacing(8)
+        self._btn_ping = QPushButton(t("hosts_ping_btn2"))
         self._btn_ping.setObjectName("secondaryBtn"); self._btn_ping.setFixedHeight(36)
         self._btn_ping.clicked.connect(self._ping_selected)
-        self._btn_deploy = QPushButton("⚙  Развернуть агент")
+        self._btn_deploy = QPushButton(t("hosts_deploy_btn2"))
         self._btn_deploy.setObjectName("secondaryBtn"); self._btn_deploy.setFixedHeight(36)
         self._btn_deploy.clicked.connect(self._deploy)
         ga.addWidget(self._btn_ping); ga.addWidget(self._btn_deploy); ga.addStretch()
-        lay.addWidget(grp_act)
+        lay.addWidget(self._grp_act)
 
         # Quick navigation
-        grp_nav = QGroupBox("Быстрый переход")
-        gn = QHBoxLayout(grp_nav); gn.setSpacing(8)
-        btn_go_file = QPushButton("📁  Файловый скан")
-        btn_go_file.setObjectName("secondaryBtn"); btn_go_file.setFixedHeight(36)
-        btn_go_file.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_FILE))
-        btn_go_mem = QPushButton("🔍  Memory Scan")
-        btn_go_mem.setObjectName("secondaryBtn"); btn_go_mem.setFixedHeight(36)
-        btn_go_mem.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_MEMORY))
-        btn_go_iso = QPushButton("🔒  Изоляция сети")
-        btn_go_iso.setObjectName("dangerBtn"); btn_go_iso.setFixedHeight(36)
-        btn_go_iso.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_ISOLATE))
-        gn.addWidget(btn_go_file); gn.addWidget(btn_go_mem); gn.addWidget(btn_go_iso)
-        lay.addWidget(grp_nav)
+        self._grp_nav = QGroupBox(t("hosts_nav_grp"))
+        gn = QHBoxLayout(self._grp_nav); gn.setSpacing(8)
+        self._btn_go_file = QPushButton(t("hosts_go_file_btn"))
+        self._btn_go_file.setObjectName("secondaryBtn"); self._btn_go_file.setFixedHeight(36)
+        self._btn_go_file.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_FILE))
+        self._btn_go_mem = QPushButton(t("hosts_go_mem_btn"))
+        self._btn_go_mem.setObjectName("secondaryBtn"); self._btn_go_mem.setFixedHeight(36)
+        self._btn_go_mem.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_MEMORY))
+        self._btn_go_iso = QPushButton(t("hosts_go_iso_btn"))
+        self._btn_go_iso.setObjectName("dangerBtn"); self._btn_go_iso.setFixedHeight(36)
+        self._btn_go_iso.clicked.connect(lambda: self._sub_tabs.setCurrentIndex(self._TAB_ISOLATE))
+        gn.addWidget(self._btn_go_file); gn.addWidget(self._btn_go_mem); gn.addWidget(self._btn_go_iso)
+        lay.addWidget(self._grp_nav)
 
         lay.addStretch()
         return w
 
-    def _detail_row(self, parent_layout, label: str) -> QLabel:
+    def _detail_row(self, parent_layout, label: str) -> tuple:
         row = QHBoxLayout()
         lbl = QLabel(label + ":")
         lbl.setMinimumWidth(130)
@@ -240,12 +255,12 @@ class HostsTab(QWidget):
         val.setWordWrap(True)
         row.addWidget(lbl); row.addWidget(val, 1)
         parent_layout.addLayout(row)
-        return val
+        return lbl, val
 
     # ── Tab 1: Файловый скан ──────────────────────────────────────────────────
 
     _INNER_TAB_STYLE = (
-        "QTabBar::tab{padding:5px 14px;font-size:11px;}"
+        "QTabBar::tab{padding:7px 14px;font-size:11px;min-height:18px;}"
         "QTabBar::tab:selected{font-weight:bold;color:#58a6ff;}"
         "QTabBar::tab:!selected{color:#6e7681;}"
         "QTabWidget::pane{border:1px solid #21262d;border-radius:4px;margin-top:2px;}")
@@ -264,44 +279,48 @@ class HostsTab(QWidget):
         w = QWidget(); lay = QVBoxLayout(w)
         lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(6)
 
-        grp_rules = QGroupBox("YARA ПРАВИЛА")
-        gr = QVBoxLayout(grp_rules); gr.setSpacing(4)
+        self._grp_file_rules = QGroupBox(t("hosts_rules_grp"))
+        gr = QVBoxLayout(self._grp_file_rules); gr.setSpacing(4)
 
         top_row = QHBoxLayout()
-        btn_all  = QPushButton("Все");    btn_all.setObjectName("secondaryBtn");  btn_all.setFixedHeight(24)
-        btn_none = QPushButton("Ничего"); btn_none.setObjectName("secondaryBtn"); btn_none.setFixedHeight(24)
-        btn_all.clicked.connect(lambda: (
+        self._btn_file_all  = QPushButton(t("hosts_btn_all"))
+        self._btn_file_all.setObjectName("secondaryBtn")
+        self._btn_file_none = QPushButton(t("hosts_btn_none"))
+        self._btn_file_none.setObjectName("secondaryBtn")
+        self._btn_file_all.clicked.connect(lambda: (
             self._toggle_rules(self._file_rule_list, True),
             self._update_rule_count(self._file_rule_list, self._file_rule_count)))
-        btn_none.clicked.connect(lambda: (
+        self._btn_file_none.clicked.connect(lambda: (
             self._toggle_rules(self._file_rule_list, False),
             self._update_rule_count(self._file_rule_list, self._file_rule_count)))
         self._file_rule_count = QLabel("0 / 0 правил")
         self._file_rule_count.setStyleSheet("color:#6e7681;font-size:11px;")
         self._file_rule_filter = QLineEdit()
         self._file_rule_filter.setPlaceholderText("🔍  Поиск...")
-        self._file_rule_filter.setFixedHeight(26)
         self._file_rule_filter.textChanged.connect(self._filter_file_rules)
-        top_row.addWidget(btn_all); top_row.addWidget(btn_none)
+        top_row.addWidget(self._btn_file_all); top_row.addWidget(self._btn_file_none)
         top_row.addWidget(self._file_rule_filter, 1)
         top_row.addWidget(self._file_rule_count)
         gr.addLayout(top_row)
 
         self._file_rule_list = QListWidget()
+        _saved_file = set(Config.get("saved_file_rules") or [])
         for name in BUILTIN_YARA_RULES:
             item = QListWidgetItem(name)
-            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setCheckState(
+                Qt.CheckState.Checked if name in _saved_file else Qt.CheckState.Unchecked)
             self._file_rule_list.addItem(item)
         self._file_rule_list.itemChanged.connect(
-            lambda: self._update_rule_count(self._file_rule_list, self._file_rule_count))
+            lambda: (self._update_rule_count(self._file_rule_list, self._file_rule_count),
+                     self._save_rule_selections()))
         self._update_rule_count(self._file_rule_list, self._file_rule_count)
         gr.addWidget(self._file_rule_list)
-        lay.addWidget(grp_rules, 1)
+        lay.addWidget(self._grp_file_rules, 1)
 
         opt_row = QHBoxLayout()
-        self._chk_ioc    = QCheckBox("IOC сбор"); self._chk_ioc.setChecked(True)
+        self._chk_ioc    = QCheckBox(t("hosts_ioc_chk")); self._chk_ioc.setChecked(True)
         self._chk_hashes = QCheckBox(t("hosts_hashes_chk"))
-        self._lbl_path   = QLabel("Путь (remote):")
+        self._lbl_path   = QLabel(t("hosts_path_remote"))
         self._path_inp   = QLineEdit(); self._path_inp.setText(r"C:\Users")
         self._path_inp.setToolTip(
             "Путь к папке на удалённом хосте.\n"
@@ -320,13 +339,20 @@ class HostsTab(QWidget):
         self._file_prog.setVisible(False)
         lay.addWidget(self._file_prog)
 
-        self._file_status = QLabel("Выберите правила и нажмите Сканировать")
+        self._file_status = QLabel(t("hosts_file_status_hint"))
         self._file_status.setStyleSheet("color:#6e7681;font-size:11px;")
         lay.addWidget(self._file_status)
 
-        self._btn_scan = QPushButton("▶  Сканировать"); self._btn_scan.setFixedHeight(38)
+        scan_row = QHBoxLayout()
+        self._btn_scan = QPushButton(t("hosts_scan_btn2")); self._btn_scan.setFixedHeight(38)
         self._btn_scan.clicked.connect(self._start_file_scan)
-        lay.addWidget(self._btn_scan)
+        self._btn_scan_stop = QPushButton(t("hosts_stop_btn"))
+        self._btn_scan_stop.setObjectName("dangerBtn")
+        self._btn_scan_stop.setFixedHeight(38)
+        self._btn_scan_stop.setEnabled(False)
+        self._btn_scan_stop.clicked.connect(self._stop_file_scan)
+        scan_row.addWidget(self._btn_scan); scan_row.addWidget(self._btn_scan_stop)
+        lay.addLayout(scan_row)
         return w
 
     def _build_file_rules_tab(self) -> QWidget:
@@ -354,9 +380,11 @@ class HostsTab(QWidget):
         ll.addWidget(self._file_custom_list, 1)
         btn_del_f = QPushButton("🗑  Удалить правило")
         btn_del_f.setObjectName("dangerBtn"); btn_del_f.setFixedHeight(30)
-        btn_del_f.clicked.connect(lambda: self._delete_custom_rule(
-            self._file_custom_list, self._file_rule_list,
-            self._file_custom_rules, self._file_rule_edit))
+        btn_del_f.clicked.connect(lambda: (
+            self._delete_custom_rule(
+                self._file_custom_list, self._file_rule_list,
+                self._shared_custom_rules, self._file_rule_edit),
+            self._sync_rule_lists()))
         ll.addWidget(btn_del_f)
         splitter.addWidget(left_w)
 
@@ -383,9 +411,11 @@ class HostsTab(QWidget):
 
         btn_add_f = QPushButton("➕  Добавить / Обновить правило")
         btn_add_f.setObjectName("secondaryBtn"); btn_add_f.setFixedHeight(34)
-        btn_add_f.clicked.connect(lambda: self._add_custom_rule(
-            self._file_rule_edit, self._file_rule_list,
-            self._file_custom_rules, self._file_custom_list))
+        btn_add_f.clicked.connect(lambda: (
+            self._add_custom_rule(
+                self._file_rule_edit, self._file_rule_list,
+                self._shared_custom_rules, self._file_custom_list),
+            self._sync_rule_lists()))
         rl.addWidget(btn_add_f)
         splitter.addWidget(right_w)
 
@@ -437,8 +467,8 @@ class HostsTab(QWidget):
         grp_rules_m = QGroupBox("YARA ПРАВИЛА ДЛЯ ПАМЯТИ")
         gr_m = QVBoxLayout(grp_rules_m); gr_m.setSpacing(4)
         top_row_m = QHBoxLayout()
-        btn_all_m  = QPushButton("Все");    btn_all_m.setObjectName("secondaryBtn");  btn_all_m.setFixedHeight(24)
-        btn_none_m = QPushButton("Ничего"); btn_none_m.setObjectName("secondaryBtn"); btn_none_m.setFixedHeight(24)
+        btn_all_m  = QPushButton("Все");    btn_all_m.setObjectName("secondaryBtn")
+        btn_none_m = QPushButton("Ничего"); btn_none_m.setObjectName("secondaryBtn")
         btn_all_m.clicked.connect(lambda: (
             self._toggle_rules(self._mem_rule_list, True),
             self._update_rule_count(self._mem_rule_list, self._mem_rule_count)))
@@ -449,7 +479,6 @@ class HostsTab(QWidget):
         self._mem_rule_count.setStyleSheet("color:#6e7681;font-size:11px;")
         self._mem_rule_filter = QLineEdit()
         self._mem_rule_filter.setPlaceholderText("🔍  Поиск...")
-        self._mem_rule_filter.setFixedHeight(26)
         self._mem_rule_filter.textChanged.connect(self._filter_mem_rules)
         top_row_m.addWidget(btn_all_m); top_row_m.addWidget(btn_none_m)
         top_row_m.addWidget(self._mem_rule_filter, 1)
@@ -457,12 +486,15 @@ class HostsTab(QWidget):
         gr_m.addLayout(top_row_m)
 
         self._mem_rule_list = QListWidget()
+        _saved_mem = set(Config.get("saved_mem_rules") or [])
         for name in BUILTIN_YARA_RULES:
             item = QListWidgetItem(name)
-            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setCheckState(
+                Qt.CheckState.Checked if name in _saved_mem else Qt.CheckState.Unchecked)
             self._mem_rule_list.addItem(item)
         self._mem_rule_list.itemChanged.connect(
-            lambda: self._update_rule_count(self._mem_rule_list, self._mem_rule_count))
+            lambda: (self._update_rule_count(self._mem_rule_list, self._mem_rule_count),
+                     self._save_rule_selections()))
         self._update_rule_count(self._mem_rule_list, self._mem_rule_count)
         gr_m.addWidget(self._mem_rule_list)
         lay.addWidget(grp_rules_m, 1)
@@ -512,9 +544,11 @@ class HostsTab(QWidget):
         ll.addWidget(self._mem_custom_list, 1)
         btn_del_m = QPushButton("🗑  Удалить правило")
         btn_del_m.setObjectName("dangerBtn"); btn_del_m.setFixedHeight(30)
-        btn_del_m.clicked.connect(lambda: self._delete_custom_rule(
-            self._mem_custom_list, self._mem_rule_list,
-            self._mem_custom_rules, self._mem_rule_edit))
+        btn_del_m.clicked.connect(lambda: (
+            self._delete_custom_rule(
+                self._mem_custom_list, self._mem_rule_list,
+                self._shared_custom_rules, self._mem_rule_edit),
+            self._sync_rule_lists()))
         ll.addWidget(btn_del_m)
         splitter.addWidget(left_w)
 
@@ -541,9 +575,11 @@ class HostsTab(QWidget):
 
         btn_add_m = QPushButton("➕  Добавить / Обновить правило")
         btn_add_m.setObjectName("secondaryBtn"); btn_add_m.setFixedHeight(34)
-        btn_add_m.clicked.connect(lambda: self._add_custom_rule(
-            self._mem_rule_edit, self._mem_rule_list,
-            self._mem_custom_rules, self._mem_custom_list))
+        btn_add_m.clicked.connect(lambda: (
+            self._add_custom_rule(
+                self._mem_rule_edit, self._mem_rule_list,
+                self._shared_custom_rules, self._mem_custom_list),
+            self._sync_rule_lists()))
         rl.addWidget(btn_add_m)
         splitter.addWidget(right_w)
 
@@ -562,9 +598,19 @@ class HostsTab(QWidget):
         self._lbl_result_stats = QLabel("Нет данных")
         self._lbl_result_stats.setStyleSheet("color:#6e7681;font-size:11px;")
         btn_clear_tbl = QPushButton("Очистить")
-        btn_clear_tbl.setObjectName("secondaryBtn"); btn_clear_tbl.setFixedHeight(24)
+        btn_clear_tbl.setObjectName("secondaryBtn")
         btn_clear_tbl.clicked.connect(self._clear_results)
+        self._btn_vt = QPushButton("🔍  Проверить в VT")
+        self._btn_vt.setObjectName("secondaryBtn")
+        self._btn_vt.setVisible(False)
+        self._btn_vt.clicked.connect(self._start_vt_check)
+        self._btn_export_csv = QPushButton("💾  CSV")
+        self._btn_export_csv.setObjectName("secondaryBtn")
+        self._btn_export_csv.setVisible(False)
+        self._btn_export_csv.clicked.connect(self._export_hashes_csv)
         stats_row.addWidget(self._lbl_result_stats); stats_row.addStretch()
+        stats_row.addWidget(self._btn_vt)
+        stats_row.addWidget(self._btn_export_csv)
         stats_row.addWidget(btn_clear_tbl)
         lay.addLayout(stats_row)
 
@@ -586,7 +632,7 @@ class HostsTab(QWidget):
         lbl_log = QLabel("Лог сканирования")
         lbl_log.setStyleSheet("color:#6e7681;font-size:11px;font-weight:bold;")
         btn_clear_log = QPushButton("Очистить лог")
-        btn_clear_log.setObjectName("secondaryBtn"); btn_clear_log.setFixedHeight(22)
+        btn_clear_log.setObjectName("secondaryBtn")
         btn_clear_log.clicked.connect(lambda: self._scan_log.clear())
         log_header.addWidget(lbl_log); log_header.addStretch(); log_header.addWidget(btn_clear_log)
         lw.addLayout(log_header)
@@ -684,9 +730,15 @@ class HostsTab(QWidget):
             f'<span style="color:{color}">{msg}</span>')
 
     def _clear_results(self):
+        if self._vt_worker and self._vt_worker.isRunning():
+            self._vt_worker.stop()
         self._tbl.setRowCount(0)
         self._scan_log.clear()
         self._lbl_result_stats.setText("Нет данных")
+        self._hash_row_map = {}
+        self._vt_results = []
+        self._btn_vt.setVisible(False)
+        self._btn_export_csv.setVisible(False)
 
     @staticmethod
     def _toggle_rules(rule_list: QListWidget, checked: bool) -> None:
@@ -779,6 +831,31 @@ class HostsTab(QWidget):
         custom_list.takeItem(custom_list.currentRow())
         editor.clear()
 
+    def _save_rule_selections(self):
+        file_checked = [self._file_rule_list.item(i).text()
+                        for i in range(self._file_rule_list.count())
+                        if self._file_rule_list.item(i).checkState() == Qt.CheckState.Checked
+                        and self._file_rule_list.item(i).text() in BUILTIN_YARA_RULES]
+        mem_checked  = [self._mem_rule_list.item(i).text()
+                        for i in range(self._mem_rule_list.count())
+                        if self._mem_rule_list.item(i).checkState() == Qt.CheckState.Checked
+                        and self._mem_rule_list.item(i).text() in BUILTIN_YARA_RULES]
+        Config.set("saved_file_rules", file_checked)
+        Config.set("saved_mem_rules",  mem_checked)
+
+    def _sync_rule_lists(self):
+        """Ensure both file and memory rule lists contain all shared custom rules."""
+        for name in self._shared_custom_rules:
+            for rule_list in (self._file_rule_list, self._mem_rule_list):
+                if not any(rule_list.item(i).text() == name
+                           for i in range(rule_list.count())):
+                    item = QListWidgetItem(name)
+                    item.setCheckState(Qt.CheckState.Checked)
+                    item.setForeground(QColor("#58a6ff"))
+                    rule_list.addItem(item)
+        self._refresh_custom_list(self._file_custom_list, self._shared_custom_rules)
+        self._refresh_custom_list(self._mem_custom_list,  self._shared_custom_rules)
+
     def _filter_file_rules(self, text: str) -> None:
         lo = text.lower()
         for i in range(self._file_rule_list.count()):
@@ -792,6 +869,10 @@ class HostsTab(QWidget):
             item.setHidden(bool(lo) and lo not in item.text().lower())
 
     def _browse_path(self):
+        QMessageBox.information(
+            self, "Локальный путь",
+            "Диалог открывает локальные папки.\n"
+            "Убедитесь, что выбранный путь существует на удалённом хосте.")
         d = QFileDialog.getExistingDirectory(self, "Выберите директорию")
         if d:
             self._path_inp.setText(d)
@@ -799,13 +880,39 @@ class HostsTab(QWidget):
     def retranslate(self, _lang: str = ""):
         self._btn_add.setText(t("hosts_add_btn"))
         self._btn_remove.setText(t("hosts_remove_btn"))
-        self._chk_hashes.setText(t("hosts_hashes_chk"))
-        self._lbl_path.setText("Путь (remote):")
-        self._tbl.setHorizontalHeaderLabels(["ТИП / ПРАВИЛО", "SEVERITY", "ФАЙЛ / ПРОЦЕСС"])
-        if self._info_label.text() in (t("hosts_select_hint"),
-                                        "Выбери хост слева", "Select a host on the left",
-                                        "Сол жақтан хостты таңдаңыз"):
+        self._btn_import_csv.setText(t("hosts_import_csv"))
+        if self._showing_hint:
             self._info_label.setText(t("hosts_select_hint"))
+        # Sub-tab titles
+        self._sub_tabs.setTabText(self._TAB_STATUS,  t("hosts_sub_status"))
+        self._sub_tabs.setTabText(self._TAB_FILE,    t("hosts_sub_file"))
+        self._sub_tabs.setTabText(self._TAB_MEMORY,  t("hosts_sub_memory"))
+        self._sub_tabs.setTabText(self._TAB_RESULTS, t("hosts_sub_results"))
+        self._sub_tabs.setTabText(self._TAB_ISOLATE, t("hosts_sub_isolate"))
+        # Status tab
+        self._grp_act.setTitle(t("hosts_actions_grp"))
+        self._grp_nav.setTitle(t("hosts_nav_grp"))
+        self._btn_ping.setText(t("hosts_ping_btn2"))
+        self._btn_deploy.setText(t("hosts_deploy_btn2"))
+        self._btn_go_file.setText(t("hosts_go_file_btn"))
+        self._btn_go_mem.setText(t("hosts_go_mem_btn"))
+        self._btn_go_iso.setText(t("hosts_go_iso_btn"))
+        self._st_addr_lbl.setText(t("hosts_addr_lbl") + ":")
+        self._st_seen_lbl.setText(t("hosts_last_ping_lbl") + ":")
+        self._st_scan_lbl.setText(t("hosts_last_scan_lbl") + ":")
+        self._st_status_lbl.setText(t("hosts_status_lbl") + ":")
+        # File scan tab
+        self._grp_file_rules.setTitle(t("hosts_rules_grp"))
+        self._btn_file_all.setText(t("hosts_btn_all"))
+        self._btn_file_none.setText(t("hosts_btn_none"))
+        self._chk_ioc.setText(t("hosts_ioc_chk"))
+        self._chk_hashes.setText(t("hosts_hashes_chk"))
+        self._lbl_path.setText(t("hosts_path_remote"))
+        self._btn_scan.setText(t("hosts_scan_btn2"))
+        self._btn_scan_stop.setText(t("hosts_stop_btn"))
+        # Results table headers
+        self._tbl.setHorizontalHeaderLabels([
+            t("hosts_tbl_type_hdr"), t("hosts_tbl_sev_hdr"), t("hosts_tbl_file_hdr")])
         self._reload_hosts()
 
     # ── Host list ──────────────────────────────────────────────────────────────
@@ -829,6 +936,7 @@ class HostsTab(QWidget):
             self._selected_id = None
             self._btn_remove.setEnabled(False)
             self._sub_tabs.setEnabled(False)
+            self._showing_hint = True
             self._info_label.setText(t("hosts_select_hint"))
             return
 
@@ -836,9 +944,10 @@ class HostsTab(QWidget):
         self._selected_id = host["id"]
         self._btn_remove.setEnabled(True)
         self._sub_tabs.setEnabled(True)
+        self._showing_hint = False
 
-        seen = host.get("last_seen") or "никогда"
-        scan = host.get("last_scan") or "никогда"
+        seen = host.get("last_seen") or t("hosts_never")
+        scan = host.get("last_scan") or t("hosts_never")
         self._info_label.setText(
             f"<b style='color:#58a6ff'>{host['name']}</b>"
             f"  ·  <span style='color:#8b949e'>{host['ip']}:{host['port']}</span>"
@@ -850,9 +959,9 @@ class HostsTab(QWidget):
     def _update_status_tab(self, host: dict):
         self._st_name.setText(host.get("name", "—"))
         self._st_addr.setText(f"{host.get('ip','—')}:{host.get('port','—')}")
-        self._st_seen.setText(host.get("last_seen") or "никогда")
-        self._st_scan.setText(host.get("last_scan") or "никогда")
-        self._st_status.setText("⟳ Статус неизвестен")
+        self._st_seen.setText(host.get("last_seen") or t("hosts_never"))
+        self._st_scan.setText(host.get("last_scan") or t("hosts_never"))
+        self._st_status.setText("⟳ Status...")
 
     def _on_tab_changed(self, idx: int):
         if idx == self._TAB_ISOLATE:
@@ -869,6 +978,53 @@ class HostsTab(QWidget):
         self._reload_hosts()
         if self._on_hosts_list_changed:
             self._on_hosts_list_changed()
+
+    def _import_hosts_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт хостов из CSV", "", "CSV файлы (*.csv);;Все файлы (*)")
+        if not path:
+            return
+
+        added = skipped = errors = 0
+        existing_ips = {h["ip"] for h in load_hosts()}
+
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                required = {"name", "ip", "port", "token"}
+                if not required.issubset(set(reader.fieldnames or [])):
+                    QMessageBox.critical(
+                        self, "Ошибка формата",
+                        "CSV должен содержать заголовки: name, ip, port, token")
+                    return
+                for row in reader:
+                    ip = row.get("ip", "").strip()
+                    name = row.get("name", "").strip()
+                    if not ip or not name:
+                        errors += 1
+                        continue
+                    if ip in existing_ips:
+                        skipped += 1
+                        continue
+                    try:
+                        port = int(row.get("port", "5555").strip())
+                    except ValueError:
+                        port = 5555
+                    token = row.get("token", "").strip()
+                    add_host(name, ip, port, token)
+                    existing_ips.add(ip)
+                    added += 1
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать CSV:\n{e}")
+            return
+
+        self._reload_hosts()
+        if self._on_hosts_list_changed:
+            self._on_hosts_list_changed()
+
+        QMessageBox.information(
+            self, "Импорт завершён",
+            f"Добавлено: {added}\nПропущено (уже есть): {skipped}\nОшибок строк: {errors}")
 
     def _remove_host(self):
         if not self._selected_id:
@@ -934,7 +1090,7 @@ class HostsTab(QWidget):
                 self._st_status.setText(
                     f"<span style='color:#3fb950'>● Online</span>" if online
                     else "<span style='color:#f85149'>✗ Offline</span>")
-                scan = h.get("last_scan") or "никогда"
+                scan = h.get("last_scan") or t("hosts_never")
                 self._info_label.setText(
                     f"<b style='color:#58a6ff'>{h['name']}</b>"
                     f"  ·  <span style='color:#8b949e'>{h['ip']}:{h['port']}</span>"
@@ -982,6 +1138,8 @@ class HostsTab(QWidget):
             level="info", scan=True, host=host_label)
 
         self._btn_scan.setEnabled(False)
+        self._btn_scan_stop.setEnabled(True)
+        self._host_list.setEnabled(False)
         self._file_prog.setVisible(True)
         self._tbl.setRowCount(0)
         self._lbl_result_stats.setText("Сканирование...")
@@ -1011,8 +1169,19 @@ class HostsTab(QWidget):
 
     def _on_file_finished(self):
         self._btn_scan.setEnabled(True)
+        self._btn_scan_stop.setEnabled(False)
+        self._host_list.setEnabled(True)
         self._file_prog.setVisible(False)
         self._sub_tabs.setTabText(self._TAB_RESULTS, "📋  Результаты")
+
+    def _stop_file_scan(self):
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.quit()
+            self._scan_worker.wait(1000)
+        self._btn_scan.setEnabled(True)
+        self._btn_scan_stop.setEnabled(False)
+        self._host_list.setEnabled(True)
+        self._log("Сканирование остановлено", "#f85149")
 
     # ── Memory scan ───────────────────────────────────────────────────────────
 
@@ -1024,19 +1193,22 @@ class HostsTab(QWidget):
         self._mem_status.setText("Загрузка процессов...")
         self._log(f"⟳ Получение процессов с {host['name']}", "#58a6ff")
         self._proc_worker = RemoteProcessListWorker(host)
-        self._proc_worker.done.connect(self._on_procs_loaded)
+        self._proc_worker.done.connect(lambda procs, h=host: self._on_procs_loaded(procs, h))
         self._proc_worker.error.connect(lambda e: (
             self._mem_status.setText(f"✘ {e}"),
             self._log(f"✘ Ошибка процессов: {e}", "#f85149")))
         self._proc_worker.finished.connect(lambda: self._btn_refresh_procs.setEnabled(True))
         self._proc_worker.start()
 
-    def _on_procs_loaded(self, procs: list):
+    def _on_procs_loaded(self, procs: list, host: dict = None):
         self._remote_procs = procs
         self._render_remote_procs(procs)
         msg = f"Загружено {len(procs)} процессов"
         self._mem_status.setText(msg)
         self._log(f"✓ {msg}", "#3fb950")
+        if host:
+            host_label = f"{host['name']} ({host['ip']})"
+            DashboardTab.log_processes(host_label, procs)
 
     def _render_remote_procs(self, procs: list):
         self._mem_proc_tbl.setRowCount(0)
@@ -1052,6 +1224,84 @@ class HostsTab(QWidget):
         lo = text.lower()
         self._render_remote_procs(
             [p for p in self._remote_procs if not lo or lo in p.get("name","").lower()])
+
+    # ── VirusTotal check for remote HASH results ──────────────────────────────
+
+    def _start_vt_check(self):
+        if not self._hash_row_map or (self._vt_worker and self._vt_worker.isRunning()):
+            return
+        hashes = [{"sha256": sha256, "file": fpath}
+                  for fpath, (_, sha256) in self._hash_row_map.items()]
+        self._btn_vt.setEnabled(False)
+        self._lbl_result_stats.setText(f"VirusTotal: 0/{len(hashes)}...")
+        self._vt_worker = RemoteHashVTWorker(hashes)
+        self._vt_worker.progress.connect(self._lbl_result_stats.setText)
+        self._vt_worker.file_done.connect(self._on_vt_file_done)
+        self._vt_worker.all_done.connect(self._on_vt_all_done)
+        self._vt_worker.start()
+
+    def _on_vt_file_done(self, data: dict):
+        fpath = data.get("file", "")
+        if fpath not in self._hash_row_map:
+            return
+        row, _ = self._hash_row_map[fpath]
+        status = data.get("status", "ERROR")
+        mal    = data.get("mal", 0)
+        total  = data.get("total", 0)
+        vt_colors = {
+            "MALICIOUS":  "#f85149",
+            "SUSPICIOUS": "#d29922",
+            "CLEAN":      "#3fb950",
+            "NOT_FOUND":  "#6e7681",
+            "RATE_LIMIT": "#8b949e",
+        }
+        color = vt_colors.get(status, "#8b949e")
+        label = status + (f" {mal}/{total}" if total else "")
+        item  = QTableWidgetItem(label)
+        item.setFont(QFont("Consolas", 11))
+        item.setForeground(QColor(color))
+        self._tbl.setItem(row, 1, item)
+        self._vt_results.append({
+            "sha256": data.get("sha256", ""),
+            "file": fpath, "status": status,
+            "mal": data.get("mal", 0), "total": data.get("total", 0),
+        })
+        if status == "MALICIOUS":
+            host_label = getattr(self, "_last_scan_host_label", "")
+            DashboardTab.log_event("HASH",
+                f"VT MALICIOUS: {fpath} ({mal}/{total})",
+                level="high", severity="Critical",
+                scan=True, host=host_label)
+
+    def _on_vt_all_done(self):
+        self._btn_vt.setEnabled(True)
+        n = len(self._hash_row_map)
+        self._lbl_result_stats.setText(f"VT завершён — {n} файлов проверено")
+        host_label = getattr(self, "_last_scan_host_label", "")
+        if self._vt_results:
+            DashboardTab.log_vt_results(host_label, list(self._vt_results))
+            self._vt_results = []
+
+    def _export_hashes_csv(self):
+        if not self._hash_row_map:
+            return
+        host_label = getattr(self, "_last_scan_host_label", "host")
+        default_name = f"hashes_{host_label.replace(' ', '_').replace('(', '').replace(')', '')}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить CSV", default_name, "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Файл", "SHA256", "VT Результат"])
+                for fpath, (row, sha256) in self._hash_row_map.items():
+                    vt_item = self._tbl.item(row, 1)
+                    vt_result = vt_item.text() if vt_item else ""
+                    writer.writerow([fpath, sha256, vt_result])
+            self._lbl_result_stats.setText(f"CSV сохранён: {path}")
+        except Exception as e:
+            self._lbl_result_stats.setText(f"✘ Ошибка экспорта: {e}")
 
     def _start_mem_scan(self):
         host = self._get_selected_host()
@@ -1072,6 +1322,7 @@ class HostsTab(QWidget):
             level="info", scan=True, host=host_label)
 
         self._btn_mem_scan.setEnabled(False); self._btn_mem_stop.setEnabled(True)
+        self._host_list.setEnabled(False)
         self._mem_prog.setVisible(True)
         self._tbl.setRowCount(0); self._lbl_result_stats.setText("Memory Scan...")
         self._mem_status.setText(f"Сканирование памяти на {host['ip']}...")
@@ -1093,6 +1344,7 @@ class HostsTab(QWidget):
 
     def _on_mem_finished(self):
         self._btn_mem_scan.setEnabled(True); self._btn_mem_stop.setEnabled(False)
+        self._host_list.setEnabled(True)
         self._mem_prog.setVisible(False)
         self._sub_tabs.setTabText(self._TAB_RESULTS, "📋  Результаты")
 
@@ -1130,6 +1382,8 @@ class HostsTab(QWidget):
             sev_colors = {"critical":"#f85149","high":"#d29922","medium":"#58a6ff","low":"#3fb950"}
 
             self._tbl.setRowCount(len(results))
+            self._hash_row_map = {}
+            self._last_scan_host_label = host_label
             real_hits = 0
             for i, r in enumerate(results):
                 typ  = r.get("type","?"); rule = r.get("rule","?")
@@ -1148,8 +1402,16 @@ class HostsTab(QWidget):
                     level="high" if sev.lower() in ("critical","high") else "info",
                     severity=sev.capitalize() if sev else typ,
                     scan=True, target=fil[:60], host=host_label)
-                if rule not in ("ERROR","TIMEOUT","WARN","INFO","COMPILE_ERR","DEBUG"):
+                if typ != "HASH" and rule not in ("ERROR","TIMEOUT","WARN","INFO","COMPILE_ERR","DEBUG"):
                     real_hits += 1
+                if typ == "HASH" and r.get("sha256"):
+                    self._hash_row_map[r.get("file","?")] = (i, r["sha256"])
+
+            n_hashes = len(self._hash_row_map)
+            self._btn_vt.setText(f"🔍  VT ({n_hashes})")
+            self._btn_vt.setVisible(n_hashes > 0)
+            self._btn_vt.setEnabled(True)
+            self._btn_export_csv.setVisible(n_hashes > 0)
 
             yara_hits = sum(1 for r in results
                 if r.get("type") in ("YARA","MEMORY")
@@ -1225,6 +1487,8 @@ class HostsTab(QWidget):
     # ── Network Isolation ─────────────────────────────────────────────────────
 
     def _check_isolation_status(self):
+        if self._iso_worker and self._iso_worker.isRunning():
+            return
         host = self._get_selected_host()
         if not host:
             return
@@ -1253,6 +1517,8 @@ class HostsTab(QWidget):
                 "QFrame{background:#0f2d14;border:1px solid #1a6e2c;border-radius:8px;}")
 
     def _isolate_host(self):
+        if self._iso_worker and self._iso_worker.isRunning():
+            return
         host = self._get_selected_host()
         if not host:
             return
@@ -1293,6 +1559,8 @@ class HostsTab(QWidget):
             self._iso_log_append(f"✘ Ошибка: {errs}", "#f85149")
 
     def _restore_host(self):
+        if self._iso_worker and self._iso_worker.isRunning():
+            return
         host = self._get_selected_host()
         if not host:
             return
@@ -1316,3 +1584,14 @@ class HostsTab(QWidget):
             self._on_iso_status({"isolated": False})
         else:
             self._iso_log_append(f"✘ Ошибка: {data}", "#f85149")
+
+    def closeEvent(self, event):
+        for attr in ("_ping_worker", "_scan_worker", "_deploy_worker",
+                     "_proc_worker", "_mem_worker", "_iso_worker", "_vt_worker"):
+            w = getattr(self, attr, None)
+            if w and w.isRunning():
+                if hasattr(w, "stop"):
+                    w.stop()
+                w.quit()
+                w.wait(2000)
+        super().closeEvent(event)
