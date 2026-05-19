@@ -1,4 +1,5 @@
 import datetime
+import threading
 import time
 
 from PyQt6.QtWidgets import (
@@ -8,6 +9,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
+from core.i18n import t
+
+
+_dashboard_lock = threading.Lock()
 
 
 class DashboardTab(QWidget):
@@ -18,6 +23,8 @@ class DashboardTab(QWidget):
         "net_checks": 0, "high_risk_ips": 0,
         "recent": [],
     }
+    remote_proc_snapshots: dict = {}   # host_label -> {ts, procs}
+    remote_hash_vt_results: list = []  # {host, file, sha256, status, mal, total}
 
     def __init__(self):
         super().__init__()
@@ -56,10 +63,11 @@ class DashboardTab(QWidget):
             "QTabBar::tab{padding:8px 20px;font-size:12px;}"
             "QTabBar::tab:selected{font-weight:bold;}"
         )
-        self._tabs.addTab(self._build_overview_tab(),  "📊  Обзор")
-        self._tabs.addTab(self._build_events_tab(),    "📝  События")
-        self._tabs.addTab(self._build_scans_tab(),     "📋  Сканирования")
-        self._tabs.addTab(self._build_remote_tab(),    "🌐  Удалённые")
+        self._tabs.addTab(self._build_overview_tab(),  t("dash_tab_overview"))
+        self._tabs.addTab(self._build_events_tab(),    t("dash_tab_events"))
+        self._tabs.addTab(self._build_scans_tab(),     t("dash_tab_scans"))
+        self._tabs.addTab(self._build_remote_tab(),    t("dash_tab_remote"))
+        self._tabs.addTab(self._build_procs_tab(),     t("dash_tab_procs"))
         lay.addWidget(self._tabs)
 
     def _build_filter_bar(self) -> QWidget:
@@ -75,26 +83,29 @@ class DashboardTab(QWidget):
             "QComboBox::drop-down{border:none;}"
         )
 
-        lbl_t = QLabel("Период:")
-        lbl_t.setStyleSheet(_lbl_style)
-        fl.addWidget(lbl_t)
+        self._lbl_period = QLabel(t("dash_period_lbl"))
+        self._lbl_period.setStyleSheet(_lbl_style)
+        fl.addWidget(self._lbl_period)
 
         self._combo_time = QComboBox()
-        self._combo_time.addItems(["Все время", "Последний час", "Сегодня", "Последние 24ч"])
+        self._combo_time.addItems([
+            t("dash_time_all"), t("dash_time_hour"),
+            t("dash_time_today"), t("dash_time_24h"),
+        ])
         self._combo_time.setFixedWidth(150)
         self._combo_time.setStyleSheet(_cb_style)
         self._combo_time.currentIndexChanged.connect(self._refresh)
         fl.addWidget(self._combo_time)
 
         fl.addSpacing(16)
-        lbl_h = QLabel("Хост:")
-        lbl_h.setStyleSheet(_lbl_style)
-        fl.addWidget(lbl_h)
+        self._lbl_host_filter = QLabel(t("dash_host_lbl"))
+        self._lbl_host_filter.setStyleSheet(_lbl_style)
+        fl.addWidget(self._lbl_host_filter)
 
         self._combo_host = QComboBox()
         self._combo_host.setFixedWidth(230)
         self._combo_host.setStyleSheet(_cb_style)
-        self._combo_host.addItem("Все хосты")
+        self._combo_host.addItem(t("dash_all_hosts"))
         self._combo_host.currentIndexChanged.connect(self._refresh)
         fl.addWidget(self._combo_host)
 
@@ -109,7 +120,8 @@ class DashboardTab(QWidget):
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(14)
 
-        grp_sev = QGroupBox("Сводка угроз")
+        self._grp_sev = QGroupBox(t("dash_threats_grp"))
+        grp_sev = self._grp_sev
         gs = QVBoxLayout(grp_sev)
         gs.setSpacing(12)
         self._bars = {}
@@ -138,7 +150,8 @@ class DashboardTab(QWidget):
             self._bars[label] = (bar, cnt)
         gs.addStretch()
 
-        grp_quick = QGroupBox("Последние события")
+        self._grp_quick = QGroupBox(t("dash_recent_grp"))
+        grp_quick = self._grp_quick
         gq = QVBoxLayout(grp_quick)
         self._quick_log = QTextEdit()
         self._quick_log.setReadOnly(True)
@@ -163,10 +176,11 @@ class DashboardTab(QWidget):
         top = QHBoxLayout()
         self._lbl_event_count = QLabel("0 событий")
         self._lbl_event_count.setStyleSheet("color:#6e7681;font-size:11px;")
-        btn_clear = QPushButton("Очистить журнал")
+        btn_clear = QPushButton(t("dash_clear_btn"))
         btn_clear.setObjectName("secondaryBtn")
         btn_clear.setFixedHeight(26)
         btn_clear.clicked.connect(self._clear_events)
+        self._btn_clear_events = btn_clear
         top.addWidget(self._lbl_event_count)
         top.addStretch()
         top.addWidget(btn_clear)
@@ -194,7 +208,10 @@ class DashboardTab(QWidget):
         lay.addWidget(self._lbl_scans_count)
 
         self.tbl = QTableWidget(0, 4)
-        self.tbl.setHorizontalHeaderLabels(["Время", "Тип", "Цель", "Результат"])
+        self.tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_time"), t("dash_tbl_type"),
+            t("dash_tbl_target"), t("dash_tbl_result"),
+        ])
         self.tbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.tbl.horizontalHeader().resizeSection(0, 75)
         self.tbl.horizontalHeader().resizeSection(1, 60)
@@ -218,8 +235,10 @@ class DashboardTab(QWidget):
         lay.addWidget(self._lbl_remote_count)
 
         self.remote_tbl = QTableWidget(0, 4)
-        self.remote_tbl.setHorizontalHeaderLabels(
-            ["Время", "Хост", "Тип", "Правило / Файл"])
+        self.remote_tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_time"), t("dash_tbl_host"),
+            t("dash_tbl_type"), t("dash_tbl_rule"),
+        ])
         self.remote_tbl.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch)
         self.remote_tbl.horizontalHeader().resizeSection(0, 85)
@@ -230,6 +249,42 @@ class DashboardTab(QWidget):
         self.remote_tbl.setStyleSheet(
             "QTableWidget{alternate-background-color:#0f1318;}")
         lay.addWidget(self.remote_tbl)
+        return w
+
+    # ── Tab: Remote processes ─────────────────────────────────────────────
+
+    def _build_procs_tab(self) -> QWidget:
+        w   = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(6)
+
+        top = QHBoxLayout()
+        self._lbl_procs_count = QLabel("0 процессов")
+        self._lbl_procs_count.setStyleSheet("color:#6e7681;font-size:11px;")
+        btn_procs_csv = QPushButton("💾  CSV")
+        btn_procs_csv.setObjectName("secondaryBtn")
+        btn_procs_csv.setFixedHeight(26)
+        btn_procs_csv.clicked.connect(self._export_procs_csv)
+        top.addWidget(self._lbl_procs_count)
+        top.addStretch()
+        top.addWidget(btn_procs_csv)
+        lay.addLayout(top)
+
+        self._procs_tbl = QTableWidget(0, 4)
+        self._procs_tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_host"), t("dash_tbl_pid"),
+            t("dash_tbl_proc_name"), t("dash_tbl_proc_path"),
+        ])
+        self._procs_tbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self._procs_tbl.horizontalHeader().resizeSection(0, 160)
+        self._procs_tbl.horizontalHeader().resizeSection(1, 55)
+        self._procs_tbl.horizontalHeader().resizeSection(2, 170)
+        self._procs_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._procs_tbl.setAlternatingRowColors(True)
+        self._procs_tbl.setStyleSheet(
+            "QTableWidget{alternate-background-color:#0f1318;}")
+        lay.addWidget(self._procs_tbl)
         return w
 
     # ── Stat card ─────────────────────────────────────────────────────────
@@ -255,7 +310,8 @@ class DashboardTab(QWidget):
     def _get_filtered(self, events: list) -> list:
         now = time.time()
         time_idx = self._combo_time.currentIndex()
-        host_sel = self._combo_host.currentText()
+        host_idx  = self._combo_host.currentIndex()
+        host_sel  = self._combo_host.currentText()
 
         result = []
         for evt in events:
@@ -269,22 +325,26 @@ class DashboardTab(QWidget):
             if time_idx == 3 and now - ts > 86400:
                 continue
 
-            if host_sel != "Все хосты":
-                evt_host = evt.get("host", "")
-                if host_sel == "Локальный":
-                    if evt_host:
-                        continue
-                elif evt_host != host_sel:
+            if host_idx == 0:
+                pass  # all hosts
+            elif host_idx == 1:
+                if evt.get("host"):
+                    continue
+            else:
+                if evt.get("host", "") != host_sel:
                     continue
 
             result.append(evt)
         return result
 
     def _update_host_combo(self, recent: list):
-        seen = sorted({evt["host"] for evt in recent if evt.get("host")})
-        current = self._combo_host.currentText()
+        seen = sorted(
+            {evt["host"] for evt in recent if evt.get("host")} |
+            set(DashboardTab.remote_proc_snapshots.keys())
+        )
+        cur_idx = self._combo_host.currentIndex()
 
-        new_items = ["Все хосты", "Локальный"] + seen
+        new_items = [t("dash_all_hosts"), t("dash_local")] + seen
         old_items = [self._combo_host.itemText(i)
                      for i in range(self._combo_host.count())]
         if new_items == old_items:
@@ -294,15 +354,16 @@ class DashboardTab(QWidget):
         self._combo_host.clear()
         for item in new_items:
             self._combo_host.addItem(item)
-        idx = self._combo_host.findText(current)
-        self._combo_host.setCurrentIndex(max(0, idx))
+        self._combo_host.setCurrentIndex(max(0, min(cur_idx, len(new_items) - 1)))
         self._combo_host.blockSignals(False)
 
     # ── Refresh ───────────────────────────────────────────────────────────
 
     def _refresh(self):
-        s      = DashboardTab.stats
-        recent = s["recent"]
+        s        = DashboardTab.stats
+        recent   = s["recent"]
+        now      = time.time()
+        time_idx = self._combo_time.currentIndex()
 
         self._update_host_combo(recent)
         filtered = self._get_filtered(recent)
@@ -341,7 +402,7 @@ class DashboardTab(QWidget):
 
         # ── Tab 2: Events — full filtered log ─────────────────────────
         n_events = len(filtered)
-        self._lbl_event_count.setText(f"{n_events} событий")
+        self._lbl_event_count.setText(t("dash_events_count", n=n_events))
         self.log.clear()
         for evt in reversed(filtered[-100:]):
             col = col_map.get(evt.get("level", "info"), "#8b949e")
@@ -354,7 +415,8 @@ class DashboardTab(QWidget):
         # ── Tab 3: Local scans ────────────────────────────────────────
         scans = [e for e in filtered if e.get("scan") and not e.get("host")]
         n_scans = len(scans)
-        self._lbl_scans_count.setText(f"{n_scans} записей")
+        self._lbl_scans_count.setText(t("dash_records_count", n=n_scans))
+        selected_scans = self.tbl.currentRow()
         self.tbl.setRowCount(0)
         for evt in reversed(scans[-50:]):
             row = self.tbl.rowCount()
@@ -369,11 +431,14 @@ class DashboardTab(QWidget):
                 if i == 3:
                     item.setForeground(QColor(col))
                 self.tbl.setItem(row, i, item)
+        if 0 <= selected_scans < self.tbl.rowCount():
+            self.tbl.setCurrentCell(selected_scans, 0)
 
         # ── Tab 4: Remote scans ───────────────────────────────────────
         remote = [e for e in filtered if e.get("host")]
         n_remote = len(remote)
-        self._lbl_remote_count.setText(f"{n_remote} записей")
+        self._lbl_remote_count.setText(t("dash_records_count", n=n_remote))
+        selected_remote = self.remote_tbl.currentRow()
         self.remote_tbl.setRowCount(0)
         rem_col = {"YARA": "#58a6ff", "IOC": "#d29922",
                    "MEMORY": "#a371f7", "HASH": "#8b949e"}
@@ -391,39 +456,153 @@ class DashboardTab(QWidget):
                 if i in (2, 3):
                     item.setForeground(QColor(col))
                 self.remote_tbl.setItem(row, i, item)
+        if 0 <= selected_remote < self.remote_tbl.rowCount():
+            self.remote_tbl.setCurrentCell(selected_remote, 0)
+
+        # ── Tab 5: Remote process snapshots ──────────────────────────────
+        host_sel  = self._combo_host.currentText()
+        snapshots = DashboardTab.remote_proc_snapshots
+        if host_sel == "Локальный":
+            snap_hosts = {}
+        elif host_sel != "Все хосты" and host_sel in snapshots:
+            snap_hosts = {host_sel: snapshots[host_sel]}
+        else:
+            snap_hosts = snapshots
+
+        selected_procs = self._procs_tbl.currentRow()
+        self._procs_tbl.setRowCount(0)
+        for hlabel, snap in snap_hosts.items():
+            snap_ts    = snap.get("ts", now) if isinstance(snap, dict) else now
+            snap_procs = snap.get("procs", snap) if isinstance(snap, dict) else snap
+            if time_idx == 1 and now - snap_ts > 3600:
+                continue
+            if time_idx == 2:
+                if datetime.datetime.fromtimestamp(snap_ts).date() != datetime.datetime.now().date():
+                    continue
+            if time_idx == 3 and now - snap_ts > 86400:
+                continue
+            for p in snap_procs:
+                row = self._procs_tbl.rowCount()
+                self._procs_tbl.insertRow(row)
+                for i, txt in enumerate([
+                    hlabel, str(p.get("pid", "")),
+                    p.get("name", ""), p.get("exe", ""),
+                ]):
+                    item = QTableWidgetItem(txt)
+                    item.setFont(QFont("Consolas", 11))
+                    self._procs_tbl.setItem(row, i, item)
+        n_procs = self._procs_tbl.rowCount()
+        if 0 <= selected_procs < n_procs:
+            self._procs_tbl.setCurrentCell(selected_procs, 0)
+        self._lbl_procs_count.setText(t("dash_procs_count", n=n_procs))
 
         # Tab badges
-        self._tabs.setTabText(
-            1, f"📝  События ({n_events})" if n_events else "📝  События")
-        self._tabs.setTabText(
-            2, f"📋  Сканирования ({n_scans})" if n_scans else "📋  Сканирования")
-        self._tabs.setTabText(
-            3, f"🌐  Удалённые ({n_remote})" if n_remote else "🌐  Удалённые")
+        base_e = t("dash_tab_events")
+        base_s = t("dash_tab_scans")
+        base_r = t("dash_tab_remote")
+        base_p = t("dash_tab_procs")
+        self._tabs.setTabText(1, f"{base_e} ({n_events})" if n_events else base_e)
+        self._tabs.setTabText(2, f"{base_s} ({n_scans})"  if n_scans  else base_s)
+        self._tabs.setTabText(3, f"{base_r} ({n_remote})" if n_remote else base_r)
+        self._tabs.setTabText(4, f"{base_p} ({n_procs})"  if n_procs  else base_p)
 
     def _clear_events(self):
         DashboardTab.stats["recent"] = []
+        DashboardTab.remote_proc_snapshots.clear()
+        DashboardTab.remote_hash_vt_results.clear()
         self.log.clear()
         self._quick_log.clear()
-        self._lbl_event_count.setText("0 событий")
+        self._procs_tbl.setRowCount(0)
+        self._lbl_procs_count.setText(t("dash_procs_count", n=0))
+        self._lbl_event_count.setText(t("dash_events_count", n=0))
         for label, (bar, cnt) in self._bars.items():
             bar.setValue(0); cnt.setText("0")
-        self._tabs.setTabText(1, "📝  События")
-        self._tabs.setTabText(2, "📋  Сканирования")
-        self._tabs.setTabText(3, "🌐  Удалённые")
+        self._tabs.setTabText(1, t("dash_tab_events"))
+        self._tabs.setTabText(2, t("dash_tab_scans"))
+        self._tabs.setTabText(3, t("dash_tab_remote"))
+        self._tabs.setTabText(4, t("dash_tab_procs"))
+
+    def retranslate(self, _lang: str = ""):
+        self._tabs.setTabText(0, t("dash_tab_overview"))
+        self._tabs.setTabText(1, t("dash_tab_events"))
+        self._tabs.setTabText(2, t("dash_tab_scans"))
+        self._tabs.setTabText(3, t("dash_tab_remote"))
+        self._tabs.setTabText(4, t("dash_tab_procs"))
+        self._grp_sev.setTitle(t("dash_threats_grp"))
+        self._grp_quick.setTitle(t("dash_recent_grp"))
+        self._lbl_period.setText(t("dash_period_lbl"))
+        self._lbl_host_filter.setText(t("dash_host_lbl"))
+        idx = self._combo_time.currentIndex()
+        self._combo_time.blockSignals(True)
+        self._combo_time.clear()
+        self._combo_time.addItems([
+            t("dash_time_all"), t("dash_time_hour"),
+            t("dash_time_today"), t("dash_time_24h"),
+        ])
+        self._combo_time.setCurrentIndex(idx)
+        self._combo_time.blockSignals(False)
+        self._btn_clear_events.setText(t("dash_clear_btn"))
+        self.tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_time"), t("dash_tbl_type"),
+            t("dash_tbl_target"), t("dash_tbl_result"),
+        ])
+        self.remote_tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_time"), t("dash_tbl_host"),
+            t("dash_tbl_type"), t("dash_tbl_rule"),
+        ])
+        self._procs_tbl.setHorizontalHeaderLabels([
+            t("dash_tbl_host"), t("dash_tbl_pid"),
+            t("dash_tbl_proc_name"), t("dash_tbl_proc_path"),
+        ])
+        self._update_host_combo(DashboardTab.stats.get("recent", []))
 
     @staticmethod
     def log_event(type_, msg, level="info", severity="",
                   target="", scan=False, host=""):
-        DashboardTab.stats["recent"].append({
-            "ts":       time.time(),
-            "time":     datetime.datetime.now().strftime("%H:%M:%S"),
-            "type":     type_,
-            "msg":      msg,
-            "level":    level,
-            "severity": severity,
-            "target":   target,
-            "scan":     scan,
-            "host":     host,
-        })
-        if len(DashboardTab.stats["recent"]) > 500:
-            DashboardTab.stats["recent"] = DashboardTab.stats["recent"][-500:]
+        with _dashboard_lock:
+            DashboardTab.stats["recent"].append({
+                "ts":       time.time(),
+                "time":     datetime.datetime.now().strftime("%H:%M:%S"),
+                "type":     type_,
+                "msg":      msg,
+                "level":    level,
+                "severity": severity,
+                "target":   target,
+                "scan":     scan,
+                "host":     host,
+            })
+            if len(DashboardTab.stats["recent"]) > 500:
+                DashboardTab.stats["recent"] = DashboardTab.stats["recent"][-500:]
+
+    @staticmethod
+    def log_processes(host_label: str, procs: list):
+        DashboardTab.remote_proc_snapshots[host_label] = {
+            "ts": time.time(), "procs": procs}
+
+    @staticmethod
+    def log_vt_results(host_label: str, results: list):
+        for r in results:
+            DashboardTab.remote_hash_vt_results.append({"host": host_label, **r})
+        if len(DashboardTab.remote_hash_vt_results) > 500:
+            DashboardTab.remote_hash_vt_results = DashboardTab.remote_hash_vt_results[-500:]
+
+    def _export_procs_csv(self):
+        import csv as _csv
+        from PyQt6.QtWidgets import QFileDialog as _QFD
+        path, _ = _QFD.getSaveFileName(
+            self, "Сохранить процессы CSV", "processes.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = _csv.writer(f)
+                w.writerow(["Хост", "PID", "Имя процесса", "Путь EXE"])
+                for row in range(self._procs_tbl.rowCount()):
+                    w.writerow([
+                        (self._procs_tbl.item(row, c).text()
+                         if self._procs_tbl.item(row, c) else "")
+                        for c in range(4)
+                    ])
+            self._lbl_procs_count.setText(f"CSV сохранён: {path}")
+        except Exception as e:
+            self._lbl_procs_count.setText(f"✘ Ошибка: {e}")
