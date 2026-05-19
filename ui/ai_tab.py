@@ -8,27 +8,29 @@ from PyQt6.QtGui import QFont, QColor, QTextCursor, QTextCharFormat
 from config import Config
 from constants import AI_SYSTEM, QUICK_PROMPTS
 from workers.ai_worker import AIWorker
+from core.i18n import t
 
 
 class AITab(QWidget):
     def __init__(self):
         super().__init__()
         self._history = []
+        self._last_response = ""
         self._build()
 
     def _build(self):
         lay = QVBoxLayout(self); lay.setSpacing(10); lay.setContentsMargins(16,16,16,16)
 
         # Provider + API key row
-        cfg_grp = QGroupBox("Настройка AI")
-        cfg_lay = QVBoxLayout(cfg_grp); cfg_lay.setSpacing(8)
+        self._grp_config = QGroupBox(t("ai_config_grp"))
+        cfg_lay = QVBoxLayout(self._grp_config); cfg_lay.setSpacing(8)
 
         prov_row = QHBoxLayout()
-        prov_row.addWidget(QLabel("Провайдер:"))
+        self._lbl_provider = QLabel(t("ai_provider_lbl"))
+        prov_row.addWidget(self._lbl_provider)
         self.provider_combo = QComboBox()
-        self.provider_combo.addItem("Groq  (бесплатно, быстро)", "groq")
-        self.provider_combo.addItem("Claude API (платно)", "claude")
-        # Восстанавливаем сохранённый провайдер
+        self.provider_combo.addItem(t("ai_groq_item"), "groq")
+        self.provider_combo.addItem(t("ai_claude_item"), "claude")
         saved_provider = Config.get("ai_provider", "groq")
         idx = 0 if saved_provider == "groq" else 1
         self.provider_combo.setCurrentIndex(idx)
@@ -38,62 +40,60 @@ class AITab(QWidget):
         cfg_lay.addLayout(prov_row)
 
         key_row = QHBoxLayout()
-        self.key_label = QLabel("Groq API Key:" if saved_provider == "groq" else "Claude API Key:")
+        self.key_label = QLabel(
+            t("ai_groq_key_lbl") if saved_provider == "groq" else t("ai_claude_key_lbl"))
         key_row.addWidget(self.key_label)
         self.key_inp = QLineEdit()
         self.key_inp.setEchoMode(QLineEdit.EchoMode.Password)
-        # Подгружаем сохранённый ключ
         if saved_provider == "groq":
             self.key_inp.setText(Config.get("groq_key", ""))
-            self.key_inp.setPlaceholderText("gsk_...   Получи бесплатно: console.groq.com")
+            self.key_inp.setPlaceholderText(t("ai_groq_ph"))
         else:
             self.key_inp.setText(Config.get("claude_key", ""))
-            self.key_inp.setPlaceholderText("sk-ant-...   console.anthropic.com")
+            self.key_inp.setPlaceholderText(t("ai_claude_ph"))
         key_row.addWidget(self.key_inp)
-        # Кнопка показать/скрыть
         self.btn_show = QPushButton("👁"); self.btn_show.setObjectName("secondaryBtn")
         self.btn_show.setFixedWidth(36); self.btn_show.setCheckable(True)
         self.btn_show.clicked.connect(lambda checked: self.key_inp.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password))
         key_row.addWidget(self.btn_show)
-        # Кнопка сохранить
-        self.btn_save_key = QPushButton("Сохранить"); self.btn_save_key.setFixedWidth(100)
+        self.btn_save_key = QPushButton(t("ai_save_key_btn")); self.btn_save_key.setFixedWidth(100)
         self.btn_save_key.clicked.connect(self._save_key)
         key_row.addWidget(self.btn_save_key)
         cfg_lay.addLayout(key_row)
 
-        hint = QLabel("Groq: регистрация на console.groq.com → API Keys → Create. Бесплатно, без карты.")
-        hint.setStyleSheet("color:#6e7681;font-size:11px;")
-        hint.setWordWrap(True)
-        self.groq_hint = hint
-        hint.setVisible(saved_provider == "groq")
-        cfg_lay.addWidget(hint)
-        lay.addWidget(cfg_grp)
+        self.groq_hint = QLabel(t("ai_groq_hint"))
+        self.groq_hint.setStyleSheet("color:#6e7681;font-size:11px;")
+        self.groq_hint.setWordWrap(True)
+        self.groq_hint.setVisible(saved_provider == "groq")
+        cfg_lay.addWidget(self.groq_hint)
+        lay.addWidget(self._grp_config)
 
         # Quick prompts + file upload row
         top_row = QHBoxLayout()
 
-        grp_q = QGroupBox("Быстрые запросы")
-        gq    = QHBoxLayout(grp_q); gq.setSpacing(6)
+        self._grp_quick = QGroupBox(t("ai_quick_grp"))
+        gq = QHBoxLayout(self._grp_quick); gq.setSpacing(6)
         self.combo = QComboBox()
         for p in QUICK_PROMPTS: self.combo.addItem(p)
         gq.addWidget(self.combo)
-        btn_q = QPushButton("Отправить")
-        btn_q.setFixedWidth(100)
-        btn_q.clicked.connect(self._send_quick); gq.addWidget(btn_q)
-        top_row.addWidget(grp_q, 3)
+        self._btn_send_quick = QPushButton(t("ai_send_quick_btn"))
+        self._btn_send_quick.setFixedWidth(100)
+        self._btn_send_quick.clicked.connect(self._send_quick)
+        gq.addWidget(self._btn_send_quick)
+        top_row.addWidget(self._grp_quick, 3)
 
-        grp_f = QGroupBox("Загрузить отчёт")
-        gf    = QVBoxLayout(grp_f); gf.setSpacing(4)
-        self.file_label = QLabel("Файл не выбран")
+        self._grp_upload = QGroupBox(t("ai_upload_grp"))
+        gf = QVBoxLayout(self._grp_upload); gf.setSpacing(4)
+        self.file_label = QLabel(t("ai_no_file"))
         self.file_label.setStyleSheet("color:#6e7681;font-size:11px;")
         self.file_label.setWordWrap(True)
         gf.addWidget(self.file_label)
-        btn_file = QPushButton("Выбрать файл")
-        btn_file.setObjectName("secondaryBtn")
-        btn_file.clicked.connect(self._load_report)
-        gf.addWidget(btn_file)
-        top_row.addWidget(grp_f, 1)
+        self._btn_choose_file = QPushButton(t("ai_choose_file_btn"))
+        self._btn_choose_file.setObjectName("secondaryBtn")
+        self._btn_choose_file.clicked.connect(self._load_report)
+        gf.addWidget(self._btn_choose_file)
+        top_row.addWidget(self._grp_upload, 1)
         lay.addLayout(top_row)
 
         # Chat window
@@ -107,19 +107,20 @@ class AITab(QWidget):
         # Input row
         inp_row = QHBoxLayout()
         self.msg_inp = QTextEdit(); self.msg_inp.setMaximumHeight(72)
-        self.msg_inp.setPlaceholderText("Введите запрос...  Ctrl+Enter — отправить")
+        self.msg_inp.setPlaceholderText(t("ai_input_ph"))
         self.msg_inp.setStyleSheet(
             "background:#161b22;border:1px solid #30363d;border-radius:6px;"
             "font-family:Segoe UI,sans-serif;font-size:13px;padding:8px;")
         inp_row.addWidget(self.msg_inp)
 
         col = QVBoxLayout(); col.setSpacing(6)
-        self.btn_send = QPushButton("Отправить")
+        self.btn_send = QPushButton(t("ai_send_btn"))
         self.btn_send.setFixedWidth(110); self.btn_send.setFixedHeight(32)
         self.btn_send.clicked.connect(self._send); col.addWidget(self.btn_send)
-        btn_clr = QPushButton("Очистить"); btn_clr.setObjectName("secondaryBtn")
-        btn_clr.setFixedWidth(110); btn_clr.setFixedHeight(32)
-        btn_clr.clicked.connect(self._clear); col.addWidget(btn_clr)
+        self._btn_clear = QPushButton(t("ai_clear_btn"))
+        self._btn_clear.setObjectName("secondaryBtn")
+        self._btn_clear.setFixedWidth(110); self._btn_clear.setFixedHeight(32)
+        self._btn_clear.clicked.connect(self._clear); col.addWidget(self._btn_clear)
         inp_row.addLayout(col)
         lay.addLayout(inp_row)
 
@@ -135,6 +136,28 @@ class AITab(QWidget):
             "  — разобрать загруженный отчёт (CSV, TXT, HTML)\n"
             "  — объяснить технику атаки MITRE ATT&CK\n\n"
             "Для анализа отчёта — загрузи файл через кнопку справа.")
+
+    def retranslate(self, _lang: str = ""):
+        self._grp_config.setTitle(t("ai_config_grp"))
+        self._lbl_provider.setText(t("ai_provider_lbl"))
+        self.provider_combo.setItemText(0, t("ai_groq_item"))
+        self.provider_combo.setItemText(1, t("ai_claude_item"))
+        provider = self.provider_combo.currentData()
+        if provider == "groq":
+            self.key_label.setText(t("ai_groq_key_lbl"))
+            self.key_inp.setPlaceholderText(t("ai_groq_ph"))
+        else:
+            self.key_label.setText(t("ai_claude_key_lbl"))
+            self.key_inp.setPlaceholderText(t("ai_claude_ph"))
+        self.btn_save_key.setText(t("ai_save_key_btn"))
+        self.groq_hint.setText(t("ai_groq_hint"))
+        self._grp_quick.setTitle(t("ai_quick_grp"))
+        self._btn_send_quick.setText(t("ai_send_quick_btn"))
+        self._grp_upload.setTitle(t("ai_upload_grp"))
+        self._btn_choose_file.setText(t("ai_choose_file_btn"))
+        self.msg_inp.setPlaceholderText(t("ai_input_ph"))
+        self.btn_send.setText(t("ai_send_btn"))
+        self._btn_clear.setText(t("ai_clear_btn"))
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Return and e.modifiers() == Qt.KeyboardModifier.ControlModifier:
@@ -167,13 +190,13 @@ class AITab(QWidget):
         provider = self.provider_combo.currentData()
         Config.set("ai_provider", provider)
         if provider == "groq":
-            self.key_label.setText("Groq API Key:")
-            self.key_inp.setPlaceholderText("gsk_...   Получи бесплатно: console.groq.com")
+            self.key_label.setText(t("ai_groq_key_lbl"))
+            self.key_inp.setPlaceholderText(t("ai_groq_ph"))
             self.key_inp.setText(Config.get("groq_key", ""))
             self.groq_hint.setVisible(True)
         else:
-            self.key_label.setText("Claude API Key:")
-            self.key_inp.setPlaceholderText("sk-ant-...   console.anthropic.com")
+            self.key_label.setText(t("ai_claude_key_lbl"))
+            self.key_inp.setPlaceholderText(t("ai_claude_ph"))
             self.key_inp.setText(Config.get("claude_key", ""))
             self.groq_hint.setVisible(False)
 
@@ -184,14 +207,13 @@ class AITab(QWidget):
             Config.set("groq_key", key)
         else:
             Config.set("claude_key", key)
-        # Краткая визуальная индикация
-        orig = self.btn_save_key.text()
-        self.btn_save_key.setText("✓ Сохранено")
+        orig = t("ai_save_key_btn")
+        self.btn_save_key.setText(t("ai_key_saved"))
         QTimer.singleShot(1500, lambda: self.btn_save_key.setText(orig))
 
     def _load_report(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Выбрать отчёт", "",
+            self, t("ai_file_dialog"), "",
             "Текстовые файлы (*.txt *.csv *.log *.html *.json);;Все файлы (*)"
         )
         if not path:
@@ -199,7 +221,6 @@ class AITab(QWidget):
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            # Обрезаем до 8000 символов чтобы не превысить контекст
             if len(content) > 8000:
                 content = content[:8000] + "\n\n[... файл обрезан до 8000 символов ...]"
             self._report_content = content
@@ -239,7 +260,6 @@ class AITab(QWidget):
         if not text:
             return
 
-        # Если загружен отчёт — добавляем его в контекст первого сообщения
         full_text = text
         if self._report_content and not any(
             "СОДЕРЖИМОЕ ФАЙЛА" in m.get("content","") for m in self._history
@@ -251,6 +271,8 @@ class AITab(QWidget):
             )
 
         self._history.append({"role":"user","content":full_text})
+        if len(self._history) > 20:
+            self._history = self._history[-20:]
         self._append_chat("user", text)
         self.msg_inp.clear()
         self.btn_send.setEnabled(False)
@@ -266,9 +288,11 @@ class AITab(QWidget):
     def _on_chunk(self, text):
         self._last_response = text
         self._append_chat("assistant", text)
-        self._history.append({"role":"assistant","content":text})
 
     def _on_done(self):
+        if hasattr(self, "_last_response") and self._last_response:
+            self._history.append({"role": "assistant", "content": self._last_response})
+            self._last_response = ""
         self.btn_send.setEnabled(True)
         self.prog.setVisible(False)
 
