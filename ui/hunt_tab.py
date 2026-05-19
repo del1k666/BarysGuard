@@ -91,24 +91,21 @@ class HuntTab(QWidget):
     # ── Hunt triggers ──────────────────────────────────────────────────────────
 
     def _hunt(self, payload: dict):
-        if self._worker and self._worker.isRunning():
-            return
+        try:
+            if self._worker and self._worker.isRunning():
+                return
+        except RuntimeError:
+            self._worker = None
+
         self._tbl.setRowCount(0)
         self._set_buttons(False)
         self._status.setText(t("hunt_searching"))
-
-        if self._worker is not None:
-            try:
-                self._worker.result.disconnect()
-                self._worker.progress.disconnect()
-                self._worker.done.disconnect()
-            except RuntimeError:
-                pass
 
         self._worker = HuntWorker(payload)
         self._worker.result.connect(self._on_result)
         self._worker.progress.connect(self._status.setText)
         self._worker.done.connect(self._on_done)
+        self._worker.finished.connect(lambda: setattr(self, "_worker", None))
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
