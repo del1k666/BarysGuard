@@ -1026,6 +1026,7 @@ class HostsTab(QWidget):
             self._sub_tabs.setEnabled(False)
             self._showing_hint = True
             self._info_label.setText(t("hosts_select_hint"))
+            self._stop_info_timer()
             return
 
         host = self._host_list.item(row).data(Qt.ItemDataRole.UserRole)
@@ -1041,6 +1042,8 @@ class HostsTab(QWidget):
             f"  ·  <span style='color:#8b949e'>{host['ip']}:{host['port']}</span>"
             f"  ·  ping: {seen}  ·  {t('hosts_info_scan')}: {scan}")
         self._update_status_tab(host)
+        if self._sub_tabs.currentIndex() == self._TAB_STATUS:
+            self._start_info_timer()
         if self._on_host_changed:
             self._on_host_changed(host)
 
@@ -1052,6 +1055,10 @@ class HostsTab(QWidget):
         self._st_status.setText("⟳ Status...")
 
     def _on_tab_changed(self, idx: int):
+        if idx == self._TAB_STATUS and self._selected_id:
+            self._start_info_timer()
+        else:
+            self._stop_info_timer()
         if idx == self._TAB_ISOLATE:
             self._check_isolation_status()
 
@@ -1191,6 +1198,82 @@ class HostsTab(QWidget):
             if h["id"] == self._selected_id:
                 return h
         return None
+
+    # ── Info (live metrics) ────────────────────────────────────────────────
+
+    def _start_info_timer(self):
+        if not hasattr(self, "_info_timer"):
+            self._info_timer = QTimer(self)
+            self._info_timer.timeout.connect(self._fetch_info)
+        self._fetch_info()
+        self._info_timer.start(30_000)
+
+    def _stop_info_timer(self):
+        if hasattr(self, "_info_timer"):
+            self._info_timer.stop()
+
+    def _fetch_info(self):
+        if not self._selected_id:
+            return
+        if self._info_worker and self._info_worker.isRunning():
+            return
+        hosts = [h for h in load_hosts() if h["id"] == self._selected_id]
+        if not hosts:
+            return
+        self._info_worker = RemoteInfoWorker(hosts[0])
+        self._info_worker.done.connect(self._on_info_done)
+        self._info_worker.error.connect(self._on_info_error)
+        self._info_worker.start()
+
+    def _on_info_done(self, data: dict):
+        import time
+        from datetime import timedelta
+
+        cpu      = data.get("cpu_percent", 0)
+        ram_pct  = data.get("ram_percent", 0)
+        ram_used = data.get("ram_used",  0) / 1024**3
+        ram_tot  = data.get("ram_total", 1) / 1024**3
+        dsk_pct  = data.get("disk_percent", 0)
+        dsk_used = data.get("disk_used",  0) / 1024**3
+        dsk_tot  = data.get("disk_total", 1) / 1024**3
+        boot     = data.get("boot_time", 0)
+        os_str   = data.get("os", "—")
+        users    = data.get("users", [])
+
+        self._met_cpu_bar.setValue(int(cpu))
+        self._met_cpu_val.setText(f"{cpu:.1f} %")
+        self._set_bar_color(self._met_cpu_bar, cpu)
+
+        self._met_ram_bar.setValue(int(ram_pct))
+        self._met_ram_val.setText(f"{ram_used:.1f} / {ram_tot:.1f} GB")
+        self._set_bar_color(self._met_ram_bar, ram_pct)
+
+        self._met_disk_bar.setValue(int(dsk_pct))
+        self._met_disk_val.setText(f"{dsk_used:.1f} / {dsk_tot:.1f} GB")
+        self._set_bar_color(self._met_disk_bar, dsk_pct)
+
+        self._met_os.setText(os_str)
+
+        if boot:
+            td   = timedelta(seconds=time.time() - boot)
+            h, r = divmod(td.seconds, 3600)
+            m    = r // 60
+            self._met_uptime.setText(f"{td.days}d {h:02d}:{m:02d}")
+        else:
+            self._met_uptime.setText("—")
+
+        self._met_users.setText(", ".join(users) if users else "—")
+        self._met_updated_lbl.setText(
+            f"{t('hosts_met_updated')}: {datetime.now().strftime('%H:%M:%S')}")
+
+    def _on_info_error(self, _msg: str):
+        for bar in (self._met_cpu_bar, self._met_ram_bar, self._met_disk_bar):
+            bar.setValue(0)
+            self._set_bar_color(bar, 0)
+        for lbl in (self._met_cpu_val, self._met_ram_val, self._met_disk_val,
+                    self._met_os, self._met_uptime, self._met_users):
+            lbl.setText("—")
+        self._met_updated_lbl.setText(t("hosts_met_updated") + ": ✗")
 
     # ── File scan ─────────────────────────────────────────────────────────────
 
