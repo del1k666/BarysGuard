@@ -11,13 +11,17 @@ import os
 import re
 import ssl
 import json
+import hmac
+import stat
 import secrets
 import socket
 import tempfile
 import subprocess
 import platform
 import hashlib
+import ipaddress
 import ctypes
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
@@ -48,14 +52,16 @@ def _load_token() -> str:
         _token = TOKEN_FILE.read_text(encoding="utf-8").strip()
     else:
         _token = secrets.token_hex(32)
-        TOKEN_FILE.write_text(_token, encoding="utf-8")
+        tmp = TOKEN_FILE.with_suffix(".tmp")
+        tmp.write_text(_token, encoding="utf-8")
+        tmp.replace(TOKEN_FILE)
     return _token
 
 
 def _auth(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if request.headers.get("X-Api-Token") != _token:
+        if not hmac.compare_digest(request.headers.get("X-Api-Token", ""), _token):
             return jsonify({"error": "unauthorized"}), 403
         return f(*args, **kwargs)
     return wrapper
@@ -82,11 +88,14 @@ def _generate_cert() -> bool:
             .sign(key, hashes.SHA256())
         )
         CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        # SEC-04: key is stored unencrypted (passphrase would require Flask ssl_context changes).
+        # Mitigate by restricting file permissions to owner read/write only.
         KEY_FILE.write_bytes(key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.TraditionalOpenSSL,
             serialization.NoEncryption(),
         ))
+        KEY_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
         return True
     except Exception:
         return False
@@ -94,6 +103,7 @@ def _generate_cert() -> bool:
 
 # ── Flask app ──────────────────────────────────────────────────────────────
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB max body
 
 
 @app.route("/ping")
@@ -122,6 +132,7 @@ def info():
         "disk_used":    disk.used,
         "disk_percent": disk.percent,
         "boot_time":    psutil.boot_time(),
+        "os":           platform.platform(),
         "users":        [u.name for u in psutil.users()],
     })
 
@@ -301,59 +312,67 @@ def scan_memory_all():
     processes = []
     for p in psutil.process_iter(["pid", "name"]):
         try:
-            processes.append({
-                "pid":  p.info["pid"],
-                "name": p.info["name"],
-            })
+            processes.append({"pid": p.info["pid"], "name": p.info["name"]})
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
-    matches = []
-    for _rule_name, rule_text in rules_dict.items():
-        tmp_path = None
-        try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".yar")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(rule_text)
-            for proc in processes:
-                try:
-                    r = subprocess.run(
-                        [YARA_EXE, tmp_path, str(proc["pid"])],
-                        capture_output=True, text=True, timeout=15,
-                        encoding="utf-8", errors="replace",
-                    )
-                    for line in r.stdout.strip().splitlines():
-                        line = line.strip()
-                        if line and " " in line:
-                            parts = line.split(" ", 1)
-                            matches.append({
-                                "rule":         parts[0],
-                                "file":         parts[1],
-                                "pid":          proc["pid"],
-                                "process_name": proc["name"],
-                            })
-                except subprocess.TimeoutExpired:
-                    matches.append({
-                        "rule": "TIMEOUT",
-                        "file": f"pid:{proc['pid']}",
-                        "pid":  proc["pid"],
-                        "process_name": proc["name"],
-                    })
-                except Exception as e:
-                    matches.append({
-                        "rule": "ERROR",
-                        "file": str(e),
-                        "pid":  proc["pid"],
-                        "process_name": proc["name"],
-                    })
-        except Exception as e:
-            matches.append({"rule": "COMPILE_ERR", "file": str(e), "pid": 0, "process_name": ""})
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
+    # Combine all rules into one file so yara runs once per process, not once per rule×process
+    combined = "\n\n".join(rules_dict.values())
+    matches  = []
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".yar")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(combined)
+
+        # Verify the combined file compiles before scanning all processes
+        probe = subprocess.run(
+            [YARA_EXE, tmp_path, str(os.getpid())],
+            capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+        )
+        if probe.returncode > 1:
+            err = probe.stderr.strip()[:200] or "compile error"
+            return jsonify({"error": f"YARA compile error: {err}"}), 400
+
+        def _scan_proc(proc):
+            try:
+                r = subprocess.run(
+                    [YARA_EXE, tmp_path, str(proc["pid"])],
+                    capture_output=True, text=True, timeout=20,
+                    encoding="utf-8", errors="replace",
+                )
+                hits = []
+                for line in r.stdout.strip().splitlines():
+                    line = line.strip()
+                    if line and " " in line:
+                        parts = line.split(" ", 1)
+                        hits.append({
+                            "rule":         parts[0],
+                            "file":         parts[1],
+                            "pid":          proc["pid"],
+                            "process_name": proc["name"],
+                        })
+                return hits
+            except subprocess.TimeoutExpired:
+                return [{"rule": "TIMEOUT", "file": f"pid:{proc['pid']}",
+                         "pid": proc["pid"], "process_name": proc["name"]}]
+            except Exception as e:
+                return [{"rule": "ERROR", "file": str(e),
+                         "pid": proc["pid"], "process_name": proc["name"]}]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            for hits in pool.map(_scan_proc, processes):
+                matches.extend(hits)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
     return jsonify({"matches": matches})
 
@@ -369,6 +388,13 @@ def hunt():
     process_name = data.get("process_name", "")
 
     result = {}
+
+    def _file_hash(fpath: str) -> str:
+        h = hashlib.sha256()
+        with open(fpath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     if mutex_name:
         SYNCHRONIZE = 0x00100000
@@ -404,11 +430,8 @@ def hunt():
                     try:
                         if os.path.getsize(fpath) > 500 * 1024 * 1024:
                             continue
-                        with open(fpath, "rb") as f:
-                            content = f.read()
-                        sha256 = hashlib.sha256(content).hexdigest()
-                        md5    = hashlib.md5(content).hexdigest()
-                        if sha256 in norm or md5 in norm:
+                        sha256 = _file_hash(fpath)
+                        if sha256 in norm:
                             found_files.append({"file": fpath, "hash": sha256})
                         file_count += 1
                     except (PermissionError, OSError):
@@ -494,8 +517,11 @@ def network_isolate():
             "status": "error",
             "errors": ["mgmt_ip is required — without it there is no way to restore isolation remotely."]
         }), 400
-    if not re.match(r'^[\d.:/a-fA-F]+$', mgmt_ip):
-        return jsonify({"status": "error", "errors": ["invalid mgmt_ip format"]}), 400
+    try:
+        ipaddress.ip_address(mgmt_ip.strip())
+        mgmt_ip = mgmt_ip.strip()
+    except ValueError:
+        return jsonify({"error": "Invalid management IP"}), 400
 
     try:
         # Remove stale rules first
@@ -547,7 +573,7 @@ def network_restore():
     return jsonify({"status": "restored"})
 
 
-def _collect_files(path: str) -> list:
+def _collect_files(path: str, limit: int = 10_000) -> list:
     if os.path.isfile(path):
         return [path]
     files = []
@@ -555,6 +581,8 @@ def _collect_files(path: str) -> list:
         for root, _, fnames in os.walk(path):
             for fn in fnames:
                 files.append(os.path.join(root, fn))
+                if len(files) >= limit:
+                    return files
     except Exception:
         pass
     return files
@@ -572,7 +600,7 @@ def run_server():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(str(CERT_FILE), str(KEY_FILE))
     app.run(host="0.0.0.0", port=PORT, ssl_context=ctx,
-            debug=False, use_reloader=False)
+            debug=False, use_reloader=False, threaded=True)
 
 
 # ── Windows Service ────────────────────────────────────────────────────────
