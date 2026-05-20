@@ -19,6 +19,7 @@ from workers.host_worker import (
     PingWorker, RemoteScanWorker, DeployWorker,
     RemoteProcessListWorker, RemoteMemScanWorker,
     NetworkIsolationWorker, RemoteHashVTWorker,
+    RemoteInfoWorker,
 )
 from constants import BUILTIN_YARA_RULES
 from core.i18n import t
@@ -109,6 +110,7 @@ class HostsTab(QWidget):
         self._mem_worker:    RemoteMemScanWorker | None = None
         self._iso_worker:    NetworkIsolationWorker | None = None
         self._vt_worker:     RemoteHashVTWorker | None = None
+        self._info_worker:   RemoteInfoWorker | None = None
         self._hash_row_map: dict = {}   # file_path -> (row_index, sha256)
 
         self._mem_stop_requested: bool = False
@@ -215,6 +217,55 @@ class HostsTab(QWidget):
         cl.insertWidget(0, self._st_name)
         lay.addWidget(card)
 
+        # ── Metrics card ─────────────────────────────────────────────────
+        self._grp_metrics = QGroupBox(t("hosts_met_card_title"))
+        gm = QVBoxLayout(self._grp_metrics)
+        gm.setSpacing(8)
+
+        def _bar_row(label_key: str):
+            row = QHBoxLayout()
+            lbl = QLabel(t(label_key) + ":")
+            lbl.setMinimumWidth(170)
+            lbl.setStyleSheet("color:#6e7681;font-size:12px;")
+            bar = QProgressBar()
+            bar.setRange(0, 100); bar.setValue(0)
+            bar.setFixedHeight(14); bar.setTextVisible(False)
+            bar.setStyleSheet(
+                "QProgressBar{border:1px solid #30363d;border-radius:4px;background:#0d1117;}"
+                "QProgressBar::chunk{background:#3fb950;border-radius:3px;}"
+            )
+            val = QLabel("—")
+            val.setMinimumWidth(120)
+            val.setStyleSheet("color:#e6edf3;font-size:12px;")
+            row.addWidget(lbl); row.addWidget(bar, 1); row.addWidget(val)
+            return row, lbl, bar, val
+
+        cpu_row,  self._met_cpu_lbl,  self._met_cpu_bar,  self._met_cpu_val  = _bar_row("hosts_met_cpu")
+        ram_row,  self._met_ram_lbl,  self._met_ram_bar,  self._met_ram_val  = _bar_row("hosts_met_ram")
+        disk_row, self._met_disk_lbl, self._met_disk_bar, self._met_disk_val = _bar_row("hosts_met_disk")
+        gm.addLayout(cpu_row)
+        gm.addLayout(ram_row)
+        gm.addLayout(disk_row)
+
+        self._met_os_lbl,     self._met_os     = self._detail_row(gm, t("hosts_met_os"))
+        self._met_uptime_lbl, self._met_uptime = self._detail_row(gm, t("hosts_met_uptime"))
+        self._met_users_lbl,  self._met_users  = self._detail_row(gm, t("hosts_met_users"))
+
+        upd_row = QHBoxLayout()
+        self._met_updated_lbl = QLabel(t("hosts_met_updated") + ": —")
+        self._met_updated_lbl.setStyleSheet("color:#6e7681;font-size:11px;")
+        self._btn_met_refresh = QPushButton(t("hosts_met_refresh"))
+        self._btn_met_refresh.setObjectName("secondaryBtn")
+        self._btn_met_refresh.setFixedHeight(28)
+        self._btn_met_refresh.clicked.connect(self._fetch_info)
+        upd_row.addWidget(self._met_updated_lbl)
+        upd_row.addStretch()
+        upd_row.addWidget(self._btn_met_refresh)
+        gm.addLayout(upd_row)
+
+        lay.addWidget(self._grp_metrics)
+        # ─────────────────────────────────────────────────────────────────
+
         # Action buttons
         self._grp_act = QGroupBox(t("hosts_actions_grp"))
         ga = QHBoxLayout(self._grp_act); ga.setSpacing(8)
@@ -244,6 +295,19 @@ class HostsTab(QWidget):
 
         lay.addStretch()
         return w
+
+    def _set_bar_color(self, bar: QProgressBar, pct: float):
+        if pct <= 60:
+            color = "#3fb950"
+        elif pct <= 85:
+            color = "#d29922"
+        else:
+            color = "#f85149"
+        bar.setStyleSheet(
+            f"QProgressBar{{border:1px solid #30363d;border-radius:4px;"
+            f"background:#0d1117;}}"
+            f"QProgressBar::chunk{{background:{color};border-radius:3px;}}"
+        )
 
     def _detail_row(self, parent_layout, label: str) -> tuple:
         row = QHBoxLayout()
