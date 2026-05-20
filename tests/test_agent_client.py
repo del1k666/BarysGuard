@@ -77,3 +77,24 @@ def test_scan_memory_all_returns_matches(client):
         result = client.scan_memory_all({"Mimikatz": "rule Mimikatz_Generic { condition: false }"})
     assert result["matches"][0]["rule"] == "Mimikatz_Generic"
     assert result["matches"][0]["pid"] == 800
+
+
+def test_get_info_returns_metrics(client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "cpu_percent": 23.0, "ram_percent": 55.0,
+        "disk_percent": 40.0, "os": "Windows-10",
+        "boot_time": 1_700_000_000.0, "users": [],
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp) as m:
+        result = client.get_info()
+        m.assert_called_once_with(
+            "https://192.168.1.1:5555/info",
+            headers={"X-Api-Token": "testtoken", "Content-Type": "application/json"},
+            verify=False,
+            timeout=10,
+        )
+    assert result["cpu_percent"] == 23.0
+    assert result["os"] == "Windows-10"

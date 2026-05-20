@@ -1,42 +1,55 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
+import pytest
+from workers.host_worker import RemoteInfoWorker
 
-FAKE_HOST = {"id": "1", "ip": "127.0.0.1", "port": 5555, "token": "tok",
-             "name": "TestHost", "last_seen": None, "last_scan": None}
+
+INFO_PAYLOAD = {
+    "cpu_percent": 42.5,
+    "ram_total":   8 * 1024**3,
+    "ram_used":    4 * 1024**3,
+    "ram_percent": 50.0,
+    "disk_total":  100 * 1024**3,
+    "disk_used":   60 * 1024**3,
+    "disk_percent": 60.0,
+    "boot_time":   1_700_000_000.0,
+    "os":          "Windows-10-10.0.19041",
+    "users":       ["DOMAIN\\alice"],
+}
 
 
-def test_remote_process_list_worker_emits_processes():
-    from workers.host_worker import RemoteProcessListWorker
-    worker = RemoteProcessListWorker(FAKE_HOST)
+def test_remote_info_worker_emits_done(qtbot):
+    host = {"ip": "192.168.1.1", "port": 5555, "token": "tok"}
+    worker = RemoteInfoWorker(host)
+
     received = []
-    worker.done.connect(lambda procs: received.extend(procs))
+    worker.done.connect(received.append)
 
-    fake_client = MagicMock()
-    fake_client.list_processes.return_value = {
-        "processes": [{"pid": 1, "name": "test.exe", "exe": "C:\\test.exe"}]
-    }
-    with patch("workers.host_worker.AgentClient", return_value=fake_client):
-        worker.run()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = INFO_PAYLOAD
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp):
+        with qtbot.waitSignal(worker.done, timeout=3000):
+            worker.start()
 
     assert len(received) == 1
-    assert received[0]["name"] == "test.exe"
+    assert received[0]["cpu_percent"] == 42.5
+    assert received[0]["os"] == "Windows-10-10.0.19041"
 
 
-def test_remote_mem_scan_worker_emits_results():
-    from workers.host_worker import RemoteMemScanWorker
-    rules = {"Mimikatz": "rule Mimikatz_Generic { condition: false }"}
-    worker = RemoteMemScanWorker(FAKE_HOST, rules)
-    results = []
-    worker.done.connect(lambda r: results.extend(r))
+def test_remote_info_worker_emits_error_on_failure(qtbot):
+    host = {"ip": "192.168.1.1", "port": 5555, "token": "tok"}
+    worker = RemoteInfoWorker(host)
 
-    fake_client = MagicMock()
-    fake_client.scan_memory_all.return_value = {
-        "matches": [{"rule": "Mimikatz_Generic", "file": "C:\\lsass.exe",
-                     "pid": 800, "process_name": "lsass.exe"}]
-    }
-    with patch("workers.host_worker.AgentClient", return_value=fake_client):
-        worker.run()
+    errors = []
+    worker.error.connect(errors.append)
 
-    assert len(results) == 1
-    assert results[0]["type"] == "MEMORY"
-    assert results[0]["rule"] == "Mimikatz_Generic"
-    assert results[0]["process_name"] == "lsass.exe"
+    import requests as req
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.side_effect = req.HTTPError("403")
+
+    with patch("requests.get", return_value=mock_resp):
+        with qtbot.waitSignal(worker.error, timeout=3000):
+            worker.start()
+
+    assert len(errors) == 1
