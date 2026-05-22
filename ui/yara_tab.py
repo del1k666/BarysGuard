@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
-from config import Config, RESULTS_DIR
+from config import Config, get_results_dir
 from constants import BUILTIN_YARA_RULES
 from core.yara_engine import YARA_PYTHON_AVAILABLE
 from core.i18n import t
@@ -221,7 +221,7 @@ class YARATab(QWidget):
         self.tbl.setRowCount(0)
         self.scan_status.setText(t("yara_scanning"))
 
-        self._w = YARAWorker(rules, target, str(RESULTS_DIR))
+        self._w = YARAWorker(rules, target, str(get_results_dir()))
         self.scan_status.setText(
             f"{t('yara_scanning')} rules: {len(rules)}, "
             f"engine: {'yara-python' if YARA_PYTHON_AVAILABLE else 'yara64.exe'}"

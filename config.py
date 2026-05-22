@@ -9,8 +9,8 @@ class Config:
     _data = {}
 
     DEFAULTS = {
-        "vt_api_key":        "VT_KEY_REMOVED",
-        "abuseipdb_key":     "ABUSEIPDB_KEY_REMOVED",
+        "vt_api_key":        "",
+        "abuseipdb_key":     "",
         "groq_key":          "",
         "claude_key":        "",
         "ai_provider":       "groq",
@@ -73,5 +73,9 @@ def _get_groq_key():  return Config.get("groq_key")
 def _get_claude_key():return Config.get("claude_key")
 
 VT_URL         = "https://www.virustotal.com/api/v3/files/{}"
-RESULTS_DIR    = Path(Config.get("results_dir",    "C:/Tools/results"))
-QUARANTINE_DIR = Path(Config.get("quarantine_dir", "C:/Tools/quarantine"))
+
+def get_results_dir() -> Path:
+    return Path(Config.get("results_dir", "C:/Tools/results"))
+
+def get_quarantine_dir() -> Path:
+    return Path(Config.get("quarantine_dir", "C:/Tools/quarantine"))

@@ -963,6 +963,15 @@ class HostsTab(QWidget):
         self._st_seen_lbl.setText(t("hosts_last_ping_lbl") + ":")
         self._st_scan_lbl.setText(t("hosts_last_scan_lbl") + ":")
         self._st_status_lbl.setText(t("hosts_status_lbl") + ":")
+        # Metrics card
+        self._grp_metrics.setTitle(t("hosts_met_card_title"))
+        self._met_cpu_lbl.setText(t("hosts_met_cpu") + ":")
+        self._met_ram_lbl.setText(t("hosts_met_ram") + ":")
+        self._met_disk_lbl.setText(t("hosts_met_disk") + ":")
+        self._met_os_lbl.setText(t("hosts_met_os") + ":")
+        self._met_uptime_lbl.setText(t("hosts_met_uptime") + ":")
+        self._met_users_lbl.setText(t("hosts_met_users") + ":")
+        self._btn_met_refresh.setText(t("hosts_met_refresh"))
         # File scan tab
         self._grp_file_rules.setTitle(t("hosts_rules_grp"))
         self._btn_file_all.setText(t("hosts_btn_all"))
