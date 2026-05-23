@@ -1,6 +1,5 @@
 ============================================================
   BARYSGUARD — Threat Intelligence & Incident Response
-  Diploma Project — AITU Cybersecurity School 2025
 ============================================================
 
 ТРЕБОВАНИЯ:
